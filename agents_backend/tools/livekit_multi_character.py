@@ -155,7 +155,7 @@ async def npc_router(ctx: agents.JobContext):
     session = AgentSession(
         stt=deepgram.STT(model='nova-3', language='en-US'),
         llm='openai/gpt-4.1-mini',
-        tts=elevenlabs.TTS(voice=_DEFAULT_VOICE, model='eleven_monolingual_v1'),
+        tts=elevenlabs.TTS(voice_id="7DkaWvcqvBstUe3167oW", model='eleven_monolingual_v1'),
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
     )
