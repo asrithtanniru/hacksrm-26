@@ -1,289 +1,404 @@
-import { Scene } from 'phaser';
-import ApiService from '../services/ApiService';
+import { Scene } from 'phaser'
+import ApiService from '../services/ApiService'
+import { walletAuthContext } from '../contexts/WalletAuthContext'
 
 export class MainMenu extends Scene {
-    constructor() {
-        super('MainMenu');
+  constructor() {
+    super('MainMenu')
+    this.walletUnsubscribe = null
+    this.walletButtonElements = null
+    this.walletStatusText = null
+    this.walletAddressText = null
+  }
+
+  create() {
+    this.add.image(0, 0, 'background').setOrigin(0, 0)
+    this.add.image(510, 260, 'logo').setScale(0.55)
+
+    const centerX = this.cameras.main.width / 2
+    const startY = 524
+    const buttonSpacing = 70
+
+    this.createButton(centerX, startY, "Let's Play!", () => {
+      this.startGameWithName()
+    })
+
+    this.createButton(centerX, startY + buttonSpacing, 'Instructions', () => {
+      this.showInstructions()
+    })
+
+    this.createButton(centerX, startY + buttonSpacing * 2, 'Support Philoagents', () => {
+      window.open('https://github.com/neural-maze/philoagents-course', '_blank')
+    })
+
+    this.setupWalletUI()
+    this.events.once('shutdown', () => this.cleanupWalletUI())
+  }
+
+  async startGameWithName() {
+    const firstAttempt = window.prompt('Enter subject name:')
+    const normalizedFirstAttempt = firstAttempt?.trim()
+
+    let playerName = normalizedFirstAttempt
+    if (!playerName) {
+      const secondAttempt = window.prompt('Name cannot be empty. Enter subject name:')
+      const normalizedSecondAttempt = secondAttempt?.trim()
+      playerName = normalizedSecondAttempt || 'Subject-0'
     }
 
-    create() {
-        this.add.image(0, 0, 'background').setOrigin(0, 0);
-        this.add.image(510, 260, 'logo').setScale(0.55);
+    const startPayload = { playerName }
 
-        const centerX = this.cameras.main.width / 2;
-        const startY = 524;
-        const buttonSpacing = 70;
+    try {
+      const roomName = `quiet-protocol-session-${playerName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+      const identity = `subject-${Date.now()}`
 
-        this.createButton(centerX, startY, 'Let\'s Play!', () => {
-            this.startGameWithName();
-        });
+      // 1) First call must be token API.
+      const tokenResponse = await ApiService.createLivekitToken({
+        roomName,
+        identity,
+        name: playerName,
+        metadata: JSON.stringify({ player_name: playerName, role: 'subject' }),
+        ttlMinutes: 60,
+      })
 
-        this.createButton(centerX, startY + buttonSpacing, 'Instructions', () => {
-            this.showInstructions();
-        });
+      // 2) Then fetch live character list.
+      const charactersResponse = await ApiService.listLivekitCharacters()
+      const availableCharacters = Array.isArray(charactersResponse?.characters) ? charactersResponse.characters : []
+      startPayload.availableCharacters = availableCharacters
 
-        this.createButton(centerX, startY + buttonSpacing * 2, 'Support Philoagents', () => {
-            window.open('https://github.com/neural-maze/philoagents-course', '_blank');
-        });
-    }
+      // 3) Then launch selected/default character agent.
+      if (availableCharacters.length > 0) {
+        const defaultCharacter = availableCharacters[0]
+        const launchResponse = await ApiService.launchCharacterRoom({
+          roomName,
+          characterToken: defaultCharacter.character_token,
+          userIdentity: identity,
+          userName: playerName,
+          replaceExistingDispatches: true,
+        })
 
-    async startGameWithName() {
-        const firstAttempt = window.prompt('Enter subject name:');
-        const normalizedFirstAttempt = firstAttempt?.trim();
-
-        let playerName = normalizedFirstAttempt;
-        if (!playerName) {
-            const secondAttempt = window.prompt('Name cannot be empty. Enter subject name:');
-            const normalizedSecondAttempt = secondAttempt?.trim();
-            playerName = normalizedSecondAttempt || 'Subject-0';
+        startPayload.launchBootstrap = {
+          roomName,
+          characterToken: defaultCharacter.character_token,
+          userToken: launchResponse?.user_token || tokenResponse?.token || null,
+          url: launchResponse?.livekit_url || launchResponse?.url || null,
         }
-
-        const startPayload = { playerName };
-
-        try {
-            const roomName = `quiet-protocol-session-${playerName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-            const identity = `subject-${Date.now()}`;
-
-            // 1) First call must be token API.
-            const tokenResponse = await ApiService.createLivekitToken({
-                roomName,
-                identity,
-                name: playerName,
-                metadata: JSON.stringify({ player_name: playerName, role: 'subject' }),
-                ttlMinutes: 60,
-            });
-
-            // 2) Then fetch live character list.
-            const charactersResponse = await ApiService.listLivekitCharacters();
-            const availableCharacters = Array.isArray(charactersResponse?.characters)
-                ? charactersResponse.characters
-                : [];
-            startPayload.availableCharacters = availableCharacters;
-
-            // 3) Then launch selected/default character agent.
-            if (availableCharacters.length > 0) {
-                const defaultCharacter = availableCharacters[0];
-                const launchResponse = await ApiService.launchCharacterRoom({
-                    roomName,
-                    characterToken: defaultCharacter.character_token,
-                    userIdentity: identity,
-                    userName: playerName,
-                    replaceExistingDispatches: true,
-                });
-
-                startPayload.launchBootstrap = {
-                    roomName,
-                    characterToken: defaultCharacter.character_token,
-                    userToken: launchResponse?.user_token || tokenResponse?.token || null,
-                    url: launchResponse?.livekit_url || launchResponse?.url || null,
-                };
-            } else {
-                startPayload.launchBootstrap = {
-                    roomName,
-                    characterToken: null,
-                    userToken: tokenResponse?.token || null,
-                    url: tokenResponse?.url || null,
-                };
-            }
-        } catch (error) {
-            // Non-blocking bootstrapping. Game can still start and launch lazily.
-            console.warn('LiveKit prelaunch failed at start flow:', error);
+      } else {
+        startPayload.launchBootstrap = {
+          roomName,
+          characterToken: null,
+          userToken: tokenResponse?.token || null,
+          url: tokenResponse?.url || null,
         }
-
-        this.scene.start('Game', startPayload);
+      }
+    } catch (error) {
+      // Non-blocking bootstrapping. Game can still start and launch lazily.
+      console.warn('LiveKit prelaunch failed at start flow:', error)
     }
 
-    createButton(x, y, text, callback) {
-        const buttonWidth = 350;
-        const buttonHeight = 60;
-        const cornerRadius = 20;
-        const maxFontSize = 28;
-        const padding = 10;
+    this.scene.start('Game', startPayload)
+  }
 
-        const shadow = this.add.graphics();
-        shadow.fillStyle(0x666666, 1);
-        shadow.fillRoundedRect(x - buttonWidth / 2 + 4, y - buttonHeight / 2 + 4, buttonWidth, buttonHeight, cornerRadius);
+  createButton(x, y, text, callback, options = {}) {
+    const buttonWidth = options.buttonWidth || 350
+    const buttonHeight = options.buttonHeight || 60
+    const cornerRadius = options.cornerRadius || 20
+    const maxFontSize = options.maxFontSize || 28
+    const padding = options.padding || 10
 
-        const button = this.add.graphics();
-        button.fillStyle(0xffffff, 1);
-        button.fillRoundedRect(x - buttonWidth / 2, y - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius);
-        button.setInteractive(
-            new Phaser.Geom.Rectangle(x - buttonWidth / 2, y - buttonHeight / 2, buttonWidth, buttonHeight),
-            Phaser.Geom.Rectangle.Contains
-        );
+    const shadow = this.add.graphics()
+    shadow.fillStyle(0x666666, 1)
+    shadow.fillRoundedRect(x - buttonWidth / 2 + 4, y - buttonHeight / 2 + 4, buttonWidth, buttonHeight, cornerRadius)
 
-        let fontSize = maxFontSize;
-        let buttonText;
-        do {
-            if (buttonText) buttonText.destroy();
-            
-            buttonText = this.add.text(x, y, text, {
-                fontSize: `${fontSize}px`,
-                fontFamily: 'Arial',
-                color: '#000000',
-                fontStyle: 'bold'
-            }).setOrigin(0.5);
+    const button = this.add.graphics()
+    button.fillStyle(0xffffff, 1)
+    button.fillRoundedRect(x - buttonWidth / 2, y - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
+    button.setInteractive(new Phaser.Geom.Rectangle(x - buttonWidth / 2, y - buttonHeight / 2, buttonWidth, buttonHeight), Phaser.Geom.Rectangle.Contains)
 
-            fontSize -= 1;
-        } while (buttonText.width > buttonWidth - padding && fontSize > 10);
+    let fontSize = maxFontSize
+    let buttonText
+    do {
+      if (buttonText) buttonText.destroy()
 
-        button.on('pointerover', () => {
-            this.updateButtonStyle(button, shadow, x, y, buttonWidth, buttonHeight, cornerRadius, true);
-            buttonText.y -= 2;
-        });
+      buttonText = this.add
+        .text(x, y, text, {
+          fontSize: `${fontSize}px`,
+          fontFamily: 'Arial',
+          color: '#000000',
+          fontStyle: 'bold',
+        })
+        .setOrigin(0.5)
 
-        button.on('pointerout', () => {
-            this.updateButtonStyle(button, shadow, x, y, buttonWidth, buttonHeight, cornerRadius, false);
-            buttonText.y += 2;
-        });
+      fontSize -= 1
+    } while (buttonText.width > buttonWidth - padding && fontSize > 10)
 
-        button.on('pointerdown', callback);
-        
-        return { button, shadow, text: buttonText };
+    button.on('pointerover', () => {
+      this.updateButtonStyle(button, shadow, x, y, buttonWidth, buttonHeight, cornerRadius, true)
+      buttonText.y -= 2
+    })
+
+    button.on('pointerout', () => {
+      this.updateButtonStyle(button, shadow, x, y, buttonWidth, buttonHeight, cornerRadius, false)
+      buttonText.y += 2
+    })
+
+    button.on('pointerdown', callback)
+
+    return { button, shadow, text: buttonText }
+  }
+
+  updateButtonStyle(button, shadow, x, y, width, height, radius, isHover) {
+    button.clear()
+    shadow.clear()
+
+    if (isHover) {
+      button.fillStyle(0x87ceeb, 1)
+      shadow.fillStyle(0x888888, 1)
+      shadow.fillRoundedRect(x - width / 2 + 2, y - height / 2 + 2, width, height, radius)
+    } else {
+      button.fillStyle(0xffffff, 1)
+      shadow.fillStyle(0x666666, 1)
+      shadow.fillRoundedRect(x - width / 2 + 4, y - height / 2 + 4, width, height, radius)
     }
 
-    updateButtonStyle(button, shadow, x, y, width, height, radius, isHover) {
-        button.clear();
-        shadow.clear();
-        
-        if (isHover) {
-            button.fillStyle(0x87CEEB, 1);
-            shadow.fillStyle(0x888888, 1);
-            shadow.fillRoundedRect(x - width / 2 + 2, y - height / 2 + 2, width, height, radius);
-        } else {
-            button.fillStyle(0xffffff, 1);
-            shadow.fillStyle(0x666666, 1);
-            shadow.fillRoundedRect(x - width / 2 + 4, y - height / 2 + 4, width, height, radius);
-        }
-        
-        button.fillRoundedRect(x - width / 2, y - height / 2, width, height, radius);
-    }
+    button.fillRoundedRect(x - width / 2, y - height / 2, width, height, radius)
+  }
 
-    showInstructions() {
-        const width = this.cameras.main.width;
-        const height = this.cameras.main.height;
-        const centerX = width / 2;
-        const centerY = height / 2;
-        
-        const elements = this.createInstructionPanel(centerX, centerY);
-        
-        const instructionContent = this.addInstructionContent(centerX, centerY, elements.panel);
-        elements.title = instructionContent.title;
-        elements.textElements = instructionContent.textElements;
-        
-        const closeElements = this.addCloseButton(centerX, centerY + 79, () => {
-            this.destroyInstructionElements(elements);
-        });
-        elements.closeButton = closeElements.button;
-        elements.closeText = closeElements.text;
-        
-        elements.overlay.on('pointerdown', () => {
-            this.destroyInstructionElements(elements);
-        });
-    }
-    
-    createInstructionPanel(centerX, centerY) {
-        const overlay = this.add.graphics();
-        overlay.fillStyle(0x000000, 0.7);
-        overlay.fillRect(0, 0, this.cameras.main.width, this.cameras.main.height);
-        overlay.setInteractive(
-            new Phaser.Geom.Rectangle(0, 0, this.cameras.main.width, this.cameras.main.height),
-            Phaser.Geom.Rectangle.Contains
-        );
-        
-        const panel = this.add.graphics();
-        panel.fillStyle(0xffffff, 1);
-        panel.fillRoundedRect(centerX - 200, centerY - 150, 400, 300, 20);
-        panel.lineStyle(4, 0x000000, 1);
-        panel.strokeRoundedRect(centerX - 200, centerY - 150, 400, 300, 20);
-        
-        return { overlay, panel };
-    }
-    
-    addInstructionContent(centerX, centerY, panel) {
-        const title = this.add.text(centerX, centerY - 110, 'INSTRUCTIONS', {
-            fontSize: '28px',
+  showInstructions() {
+    const width = this.cameras.main.width
+    const height = this.cameras.main.height
+    const centerX = width / 2
+    const centerY = height / 2
+
+    const elements = this.createInstructionPanel(centerX, centerY)
+
+    const instructionContent = this.addInstructionContent(centerX, centerY, elements.panel)
+    elements.title = instructionContent.title
+    elements.textElements = instructionContent.textElements
+
+    const closeElements = this.addCloseButton(centerX, centerY + 79, () => {
+      this.destroyInstructionElements(elements)
+    })
+    elements.closeButton = closeElements.button
+    elements.closeText = closeElements.text
+
+    elements.overlay.on('pointerdown', () => {
+      this.destroyInstructionElements(elements)
+    })
+  }
+
+  createInstructionPanel(centerX, centerY) {
+    const overlay = this.add.graphics()
+    overlay.fillStyle(0x000000, 0.7)
+    overlay.fillRect(0, 0, this.cameras.main.width, this.cameras.main.height)
+    overlay.setInteractive(new Phaser.Geom.Rectangle(0, 0, this.cameras.main.width, this.cameras.main.height), Phaser.Geom.Rectangle.Contains)
+
+    const panel = this.add.graphics()
+    panel.fillStyle(0xffffff, 1)
+    panel.fillRoundedRect(centerX - 200, centerY - 150, 400, 300, 20)
+    panel.lineStyle(4, 0x000000, 1)
+    panel.strokeRoundedRect(centerX - 200, centerY - 150, 400, 300, 20)
+
+    return { overlay, panel }
+  }
+
+  addInstructionContent(centerX, centerY, panel) {
+    const title = this.add
+      .text(centerX, centerY - 110, 'INSTRUCTIONS', {
+        fontSize: '28px',
+        fontFamily: 'Arial',
+        color: '#000000',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+
+    const instructions = ['Arrow keys for moving', 'A (or E) near entity to connect voice', 'ESC for closing the dialogue']
+
+    const textElements = []
+    let yPos = centerY - 59
+    instructions.forEach((instruction) => {
+      textElements.push(
+        this.add
+          .text(centerX, yPos, instruction, {
+            fontSize: '22px',
             fontFamily: 'Arial',
             color: '#000000',
-            fontStyle: 'bold'
-        }).setOrigin(0.5);
-        
-        const instructions = [
-            'Arrow keys for moving',
-            'A (or E) near entity to connect voice',
-            'ESC for closing the dialogue'
-        ];
-        
-        const textElements = [];
-        let yPos = centerY - 59;
-        instructions.forEach(instruction => {
-            textElements.push(
-                this.add.text(centerX, yPos, instruction, {
-                    fontSize: '22px',
-                    fontFamily: 'Arial',
-                    color: '#000000'
-                }).setOrigin(0.5)
-            );
-            yPos += 40;
-        });
-        
-        return { title, textElements };
+          })
+          .setOrigin(0.5),
+      )
+      yPos += 40
+    })
+
+    return { title, textElements }
+  }
+
+  addCloseButton(x, y, callback) {
+    const adjustedY = y + 10
+
+    const buttonWidth = 120
+    const buttonHeight = 40
+    const cornerRadius = 10
+
+    const closeButton = this.add.graphics()
+    closeButton.fillStyle(0x87ceeb, 1)
+    closeButton.fillRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
+    closeButton.lineStyle(2, 0x000000, 1)
+    closeButton.strokeRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
+
+    const closeText = this.add
+      .text(x, adjustedY, 'Close', {
+        fontSize: '20px',
+        fontFamily: 'Arial',
+        color: '#000000',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+
+    closeButton.setInteractive(new Phaser.Geom.Rectangle(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight), Phaser.Geom.Rectangle.Contains)
+
+    closeButton.on('pointerover', () => {
+      closeButton.clear()
+      closeButton.fillStyle(0x5cacee, 1)
+      closeButton.fillRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
+      closeButton.lineStyle(2, 0x000000, 1)
+      closeButton.strokeRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
+    })
+
+    closeButton.on('pointerout', () => {
+      closeButton.clear()
+      closeButton.fillStyle(0x87ceeb, 1)
+      closeButton.fillRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
+      closeButton.lineStyle(2, 0x000000, 1)
+      closeButton.strokeRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
+    })
+
+    closeButton.on('pointerdown', callback)
+
+    return { button: closeButton, text: closeText }
+  }
+
+  destroyInstructionElements(elements) {
+    elements.overlay.destroy()
+    elements.panel.destroy()
+    elements.title.destroy()
+
+    elements.textElements.forEach((text) => text.destroy())
+
+    elements.closeButton.destroy()
+    elements.closeText.destroy()
+  }
+
+  setupWalletUI() {
+    const panelCenterX = this.cameras.main.width - 170
+    const panelTopY = 64
+
+    this.walletStatusText = this.add
+      .text(panelCenterX, panelTopY - 24, 'Pelagus: checking...', {
+        fontSize: '16px',
+        fontFamily: 'Arial',
+        color: '#ffffff',
+        fontStyle: 'bold',
+        backgroundColor: '#000000',
+      })
+      .setPadding(8, 4)
+      .setOrigin(0.5)
+
+    this.walletButtonElements = this.createButton(
+      panelCenterX,
+      panelTopY + 24,
+      'Connect Wallet',
+      () => {
+        this.handleWalletButtonClick()
+      },
+      {
+        buttonWidth: 250,
+        buttonHeight: 46,
+        cornerRadius: 14,
+        maxFontSize: 20,
+      },
+    )
+
+    this.walletAddressText = this.add
+      .text(panelCenterX, panelTopY + 64, '', {
+        fontSize: '14px',
+        fontFamily: 'Arial',
+        color: '#ffffff',
+        fontStyle: 'bold',
+        backgroundColor: '#000000',
+      })
+      .setPadding(6, 3)
+      .setOrigin(0.5)
+
+    this.walletUnsubscribe = walletAuthContext.subscribe((state) => {
+      this.renderWalletState(state)
+    })
+
+    walletAuthContext.initialize()
+  }
+
+  cleanupWalletUI() {
+    if (this.walletUnsubscribe) {
+      this.walletUnsubscribe()
+      this.walletUnsubscribe = null
     }
-    
-    addCloseButton(x, y, callback) {
-        const adjustedY = y + 10;
-        
-        const buttonWidth = 120;
-        const buttonHeight = 40;
-        const cornerRadius = 10;
-        
-        const closeButton = this.add.graphics();
-        closeButton.fillStyle(0x87CEEB, 1);
-        closeButton.fillRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius);
-        closeButton.lineStyle(2, 0x000000, 1);
-        closeButton.strokeRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius);
-        
-        const closeText = this.add.text(x, adjustedY, 'Close', {
-            fontSize: '20px',
-            fontFamily: 'Arial',
-            color: '#000000',
-            fontStyle: 'bold'
-        }).setOrigin(0.5);
-        
-        closeButton.setInteractive(
-            new Phaser.Geom.Rectangle(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight),
-            Phaser.Geom.Rectangle.Contains
-        );
-        
-        closeButton.on('pointerover', () => {
-            closeButton.clear();
-            closeButton.fillStyle(0x5CACEE, 1);
-            closeButton.fillRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius);
-            closeButton.lineStyle(2, 0x000000, 1);
-            closeButton.strokeRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius);
-        });
-        
-        closeButton.on('pointerout', () => {
-            closeButton.clear();
-            closeButton.fillStyle(0x87CEEB, 1);
-            closeButton.fillRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius);
-            closeButton.lineStyle(2, 0x000000, 1);
-            closeButton.strokeRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius);
-        });
-        
-        closeButton.on('pointerdown', callback);
-        
-        return { button: closeButton, text: closeText };
+  }
+
+  renderWalletState(state) {
+    if (!this.walletStatusText || !this.walletButtonElements || !this.walletAddressText) {
+      return
     }
-    
-    destroyInstructionElements(elements) {
-        elements.overlay.destroy();
-        elements.panel.destroy();
-        elements.title.destroy();
-        
-        elements.textElements.forEach(text => text.destroy());
-        
-        elements.closeButton.destroy();
-        elements.closeText.destroy();
+
+    if (!state.isPelagusInstalled) {
+      this.walletStatusText.setText('Pelagus not detected')
+      this.walletStatusText.setColor('#ffdf6b')
+      this.walletButtonElements.text.setText('Install Pelagus')
+      this.walletAddressText.setText('')
+      return
     }
+
+    if (state.isConnected && state.address) {
+      this.walletStatusText.setText('Wallet connected')
+      this.walletStatusText.setColor('#90ee90')
+      this.walletButtonElements.text.setText('Disconnect Wallet')
+      this.walletAddressText.setText(this.formatAddress(state.address))
+      return
+    }
+
+    this.walletStatusText.setText('Wallet not connected')
+    this.walletStatusText.setColor('#ffffff')
+    this.walletButtonElements.text.setText('Connect Wallet')
+    this.walletAddressText.setText('')
+  }
+
+  formatAddress(address) {
+    if (!address || address.length < 12) {
+      return address || ''
+    }
+
+    return `${address.slice(0, 8)}...${address.slice(-6)}`
+  }
+
+  async handleWalletButtonClick() {
+    const state = walletAuthContext.getState()
+
+    if (!state.isPelagusInstalled) {
+      window.open('https://pelaguswallet.io/docs/develop/get-started/detecting-pelagus/', '_blank')
+      return
+    }
+
+    if (state.isConnected) {
+      walletAuthContext.disconnect()
+      return
+    }
+
+    try {
+      await walletAuthContext.connect()
+    } catch (error) {
+      if (error?.code === 4001) {
+        console.log('Pelagus wallet connection request was rejected by the user.')
+        return
+      }
+      console.error('Failed to connect Pelagus wallet:', error)
+    }
+  }
 }
