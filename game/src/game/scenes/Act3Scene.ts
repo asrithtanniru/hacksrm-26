@@ -75,11 +75,12 @@ export class Act3Scene extends Scene
 
         // --- PLAYER (starts at bottom of world) ---
         this.player = this.physics.add.sprite(this.worldW / 2, this.worldH - 150, 'aarav');
-        this.player.setDisplaySize(48, 64);
+        this.player.setDisplaySize(150, 200);
         this.player.setDepth(50);
         this.player.setCrop(230, 50, 310, 420);
         this.player.body.setCollideWorldBounds(true);
-        this.player.body.setSize(30, 45);
+        this.player.body.setSize(220, 300);
+        this.player.body.setOffset(40, 60);
 
         // --- CAMERA ---
         this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
@@ -345,5 +346,30 @@ export class Act3Scene extends Scene
         else if (down) this.player.body.setVelocityY(this.speed);
 
         this.player.body.velocity.normalize().scale(this.speed);
+
+        this.updatePlayerPose();
+    }
+
+    private updatePlayerPose() {
+        const vx = this.player.body.velocity.x;
+        const vy = this.player.body.velocity.y;
+
+        if (Math.abs(vx) > Math.abs(vy)) {
+            if (vx > 0) {
+                // Moving Right -> Bottom Left quadrant in sheet
+                this.player.setCrop(230, 562, 310, 420);
+            } else if (vx < 0) {
+                // Moving Left -> Bottom Right quadrant in sheet
+                this.player.setCrop(998, 562, 310, 420);
+            }
+        } else if (Math.abs(vy) > Math.abs(vx)) {
+            if (vy > 0) {
+                // Moving Down -> Top Left quadrant
+                this.player.setCrop(230, 50, 310, 420);
+            } else if (vy < 0) {
+                // Moving Up -> Top Right quadrant
+                this.player.setCrop(998, 50, 310, 420);
+            }
+        }
     }
 }

@@ -42,12 +42,15 @@ export class Preloader extends Scene
     preload ()
     {
         this.load.setPath('assets');
-
         // Environment backgrounds
         this.load.image('hallway-bg', 'TQP_A1_ENV_Hallway_Base.png');
         this.load.image('trauma-bg', 'TQP_A1_ENV_TraumaRoom_Base.png');
         this.load.image('neurocore-bg', 'TQP_AF_ENV_NeuroCore_Base.png');
         this.load.image('security-tiles', 'TQP_A1_TILE_SecurityRoom_Modular.png');
+
+        // Tilemaps
+        this.load.tilemapTiledJSON('act1-map', 'act1-map.json');
+        this.load.image('act1-tiles', 'act1-tiles.png');
 
         // Character sprites
         this.load.image('aarav', 'TQP_NPC_Aarav_Idle.png');

@@ -15,9 +15,10 @@ export class Act1Scene extends Scene
     private isShowingDialogue: boolean = false;
     private transitioned: boolean = false;
 
-    // World dimensions (larger than canvas for scrolling)
-    private worldW = 2048;
-    private worldH = 1536;
+    // World and map properties
+    private map!: Phaser.Tilemaps.Tilemap;
+    private worldW = 1584; // 99 tiles * 16px
+    private worldH = 1328; // 83 tiles * 16px
 
     constructor ()
     {
@@ -35,16 +36,22 @@ export class Act1Scene extends Scene
         this.cameras.main.setBackgroundColor(0x05070B);
         this.cameras.main.fadeIn(1000, 0, 0, 0);
 
-        // --- WORLD BACKGROUND ---
-        // Use hallway image at scaled-up size so it fills a larger explorable world
-        const bg = this.add.image(this.worldW / 2, this.worldH / 2, 'hallway-bg');
-        bg.setDisplaySize(this.worldW, this.worldH);
+        // --- TILEMAP ---
+        this.map = this.make.tilemap({ key: 'act1-map' });
+        const tileset = this.map.addTilesetImage('spritefusion', 'act1-tiles');
+        
+        // Create layers
+        const layer0 = this.map.createLayer('Layer_0', tileset!, 0, 0);
+        
+        // Update world dimensions based on map
+        this.worldW = this.map.widthInPixels;
+        this.worldH = this.map.heightInPixels;
 
         // Set world physics bounds
         this.physics.world.setBounds(0, 0, this.worldW, this.worldH);
 
-        // --- DECORATIVE PROPS extracted from Security Room tileset via crop ---
-        this.placeProps();
+        // Set up collisions (we can use setCollisionByExclusion([-1]) for simplicity or check properties)
+        layer0?.setCollisionByProperty({ collider: true });
 
         // --- SCANLINE OVERLAY (fixed to camera) ---
         const { width, height } = this.scale;
@@ -61,12 +68,18 @@ export class Act1Scene extends Scene
         // Aarav sprite: 1536x1024 image with 2x2 grid (front, back, left, right)
         // Front-facing is top-left quadrant
         this.player = this.physics.add.sprite(200, this.worldH / 2, 'aarav');
-        this.player.setDisplaySize(48, 64);
+        this.player.setDisplaySize(150, 200);
         this.player.setDepth(50);
         // Crop to front-facing quadrant (top-left of 2x2 grid)
         this.player.setCrop(230, 50, 310, 420);
         this.player.body.setCollideWorldBounds(true);
-        this.player.body.setSize(30, 45);
+        this.player.body.setSize(220, 300);
+        this.player.body.setOffset(40, 60);
+
+        // --- COLLISIONS ---
+        if (layer0) {
+            this.physics.add.collider(this.player, layer0);
+        }
 
         // --- CAMERA follow ---
         this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
@@ -131,31 +144,6 @@ export class Act1Scene extends Scene
         EventBus.emit('current-scene-ready', this);
     }
 
-    placeProps ()
-    {
-        // Place some individual props extracted from the security room modular tileset
-        // These are decorative objects placed around the hallway world
-        // We use setCrop to extract specific items from the 1536x1024 sheet
-
-        const propPositions = [
-            // Desk with monitors — crop from top-left area of security tiles
-            { x: 500, y: 400, cropX: 0, cropY: 0, cropW: 350, cropH: 200, scale: 0.5 },
-            // Another desk cluster
-            { x: 1200, y: 800, cropX: 0, cropY: 400, cropW: 400, cropH: 250, scale: 0.45 },
-            // Filing cabinets / small props
-            { x: 800, y: 1100, cropX: 600, cropY: 700, cropW: 200, cropH: 180, scale: 0.5 },
-            // Monitors
-            { x: 1600, y: 300, cropX: 0, cropY: 0, cropW: 300, cropH: 200, scale: 0.4 },
-        ];
-
-        propPositions.forEach(p => {
-            const prop = this.add.image(p.x, p.y, 'security-tiles');
-            prop.setCrop(p.cropX, p.cropY, p.cropW, p.cropH);
-            prop.setScale(p.scale);
-            prop.setDepth(15);
-            prop.setAlpha(0.7);
-        });
-    }
 
     createClues ()
     {
@@ -341,5 +329,30 @@ export class Act1Scene extends Scene
         else if (down) this.player.body.setVelocityY(this.speed);
 
         this.player.body.velocity.normalize().scale(this.speed);
+
+        this.updatePlayerPose();
+    }
+
+    private updatePlayerPose() {
+        const vx = this.player.body.velocity.x;
+        const vy = this.player.body.velocity.y;
+
+        if (Math.abs(vx) > Math.abs(vy)) {
+            if (vx > 0) {
+                // Moving Right -> Bottom Left quadrant in sheet
+                this.player.setCrop(230, 562, 310, 420);
+            } else if (vx < 0) {
+                // Moving Left -> Bottom Right quadrant in sheet
+                this.player.setCrop(998, 562, 310, 420);
+            }
+        } else if (Math.abs(vy) > Math.abs(vx)) {
+            if (vy > 0) {
+                // Moving Down -> Top Left quadrant
+                this.player.setCrop(230, 50, 310, 420);
+            } else if (vy < 0) {
+                // Moving Up -> Top Right quadrant
+                this.player.setCrop(998, 50, 310, 420);
+            }
+        }
     }
 }

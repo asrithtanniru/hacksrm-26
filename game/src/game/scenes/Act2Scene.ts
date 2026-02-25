@@ -65,11 +65,12 @@ export class Act2Scene extends Scene
 
         // --- PLAYER ---
         this.player = this.physics.add.sprite(150, this.worldH / 2, 'aarav');
-        this.player.setDisplaySize(48, 64);
+        this.player.setDisplaySize(150, 200);
         this.player.setDepth(50);
         this.player.setCrop(230, 50, 310, 420);
         this.player.body.setCollideWorldBounds(true);
-        this.player.body.setSize(30, 45);
+        this.player.body.setSize(220, 300);
+        this.player.body.setOffset(40, 60);
 
         // --- CAMERA ---
         this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
@@ -78,20 +79,20 @@ export class Act2Scene extends Scene
         // --- JANITOR NPC ---
         // Crop front-facing from the janitor turnaround (leftmost quarter)
         this.janitorNpc = this.add.image(this.worldW / 2, this.worldH / 2 - 50, 'janitor');
-        this.janitorNpc.setDisplaySize(60, 90);
+        this.janitorNpc.setDisplaySize(180, 270);
         this.janitorNpc.setDepth(49);
         this.janitorNpc.setCrop(30, 50, 310, 400);
 
         // Janitor interaction zone
-        const janitorZone = this.add.zone(this.worldW / 2, this.worldH / 2 - 50, 100, 120);
+        const janitorZone = this.add.zone(this.worldW / 2, this.worldH / 2 - 50, 200, 250);
         this.physics.add.existing(janitorZone, true);
 
         // Janitor collision body
         const janitorBody = this.physics.add.image(this.worldW / 2, this.worldH / 2 - 50, 'janitor');
-        janitorBody.setDisplaySize(48, 70);
+        janitorBody.setDisplaySize(150, 220);
         janitorBody.setAlpha(0);
         janitorBody.setImmovable(true);
-        janitorBody.body.setSize(40, 60);
+        janitorBody.body.setSize(180, 240);
         this.physics.add.collider(this.player, janitorBody);
 
         // Interact prompt
@@ -385,5 +386,30 @@ export class Act2Scene extends Scene
         else if (down) this.player.body.setVelocityY(this.speed);
 
         this.player.body.velocity.normalize().scale(this.speed);
+
+        this.updatePlayerPose();
+    }
+
+    private updatePlayerPose() {
+        const vx = this.player.body.velocity.x;
+        const vy = this.player.body.velocity.y;
+
+        if (Math.abs(vx) > Math.abs(vy)) {
+            if (vx > 0) {
+                // Moving Right -> Bottom Left quadrant in sheet
+                this.player.setCrop(230, 562, 310, 420);
+            } else if (vx < 0) {
+                // Moving Left -> Bottom Right quadrant in sheet
+                this.player.setCrop(998, 562, 310, 420);
+            }
+        } else if (Math.abs(vy) > Math.abs(vx)) {
+            if (vy > 0) {
+                // Moving Down -> Top Left quadrant
+                this.player.setCrop(230, 50, 310, 420);
+            } else if (vy < 0) {
+                // Moving Up -> Top Right quadrant
+                this.player.setCrop(998, 50, 310, 420);
+            }
+        }
     }
 }
