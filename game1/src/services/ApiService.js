@@ -99,6 +99,14 @@ class ApiService {
     });
   }
 
+  async endCharacterRoom({ roomName, closeRoom = true, dispatchId = null }) {
+    return this.request('/livekit/character/end', 'POST', {
+      room_name: roomName,
+      close_room: Boolean(closeRoom),
+      dispatch_id: dispatchId,
+    });
+  }
+
   getFallbackResponse(character) {
     return `I'm sorry, ${character.name || 'the character'} is unavailable at the moment. Please try again later.`;
   }

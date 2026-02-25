@@ -15,6 +15,14 @@ class VoiceChatService {
     return this.connected;
   }
 
+  _buildIdentity(playerName) {
+    const safePlayerName = (playerName || 'Subject-0')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return `subject-${safePlayerName || 'subject'}-${Date.now()}`;
+  }
+
   async loadLivekitClient() {
     if (this.livekitClient) {
       return this.livekitClient;
@@ -89,47 +97,7 @@ class VoiceChatService {
     throw lastError || new Error('LiveKit UMD script failed to load');
   }
 
-  async connectToCharacter({ roomName, characterId, playerName }) {
-    const lk = await this.loadLivekitClient();
-    const safePlayerName = playerName || 'Subject-0';
-    const identity = `subject-${safePlayerName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now()}`;
-
-    if (this.connected && this.room && this.roomName === roomName) {
-      this.activeCharacterId = characterId;
-      await ApiService.switchCharacter({ roomName, characterToken: characterId });
-      await ApiService.setCharacterEngagement({
-        roomName,
-        engaged: true,
-        characterToken: characterId,
-      });
-      return;
-    }
-
-    if (this.connected) {
-      await this.disconnect();
-    }
-
-    const launchResponse = await ApiService.launchCharacterRoom({
-      roomName,
-      characterToken: characterId,
-      userIdentity: identity,
-      userName: safePlayerName,
-      replaceExistingDispatches: true,
-    });
-
-    const token = launchResponse.user_token;
-    const url = launchResponse.url || launchResponse.livekit_url || window.__LIVEKIT_URL__;
-    this.livekitUrl = url;
-
-    if (!url || !token) {
-      throw new Error('Missing LiveKit url/token from backend');
-    }
-
-    this.room = new lk.Room({
-      adaptiveStream: true,
-      dynacast: true,
-    });
-
+  _attachTrackListeners() {
     this.room.on('trackSubscribed', (track) => {
       if (track.kind !== 'audio') return;
       const element = track.attach();
@@ -150,18 +118,66 @@ class VoiceChatService {
         this.remoteAudioElements.delete(track.sid);
       }
     });
+  }
+
+  async ensureConnected({ roomName, playerName, initialCharacterId }) {
+    const lk = await this.loadLivekitClient();
+    const safePlayerName = playerName || 'Subject-0';
+
+    if (this.connected && this.room && this.roomName === roomName) {
+      return;
+    }
+
+    if (this.connected) {
+      await this.disconnect();
+    }
+
+    const launchResponse = await ApiService.launchCharacterRoom({
+      roomName,
+      characterToken: initialCharacterId,
+      userIdentity: this._buildIdentity(safePlayerName),
+      userName: safePlayerName,
+      replaceExistingDispatches: true,
+    });
+
+    const token = launchResponse.user_token;
+    const url = launchResponse.livekit_url || launchResponse.url || window.__LIVEKIT_URL__;
+    this.livekitUrl = url;
+
+    if (!url || !token) {
+      throw new Error('Missing LiveKit url/token from backend launch response');
+    }
+
+    this.room = new lk.Room({
+      adaptiveStream: true,
+      dynacast: true,
+    });
+
+    this._attachTrackListeners();
 
     await this.room.connect(url, token);
     await this.room.localParticipant.setMicrophoneEnabled(true);
 
     this.connected = true;
     this.roomName = roomName;
-    this.activeCharacterId = characterId;
+    this.activeCharacterId = null;
 
-    await ApiService.switchCharacter({
+    // Session starts disengaged. Talk button will enable engagement.
+    await ApiService.setCharacterEngagement({
       roomName,
-      characterToken: characterId,
+      engaged: false,
     });
+  }
+
+  async connectToCharacter({ roomName, characterId, playerName }) {
+    await this.ensureConnected({
+      roomName,
+      playerName,
+      initialCharacterId: characterId,
+    });
+
+    this.activeCharacterId = characterId;
+    await ApiService.switchCharacter({ roomName, characterToken: characterId });
     await ApiService.setCharacterEngagement({
       roomName,
       engaged: true,
@@ -169,17 +185,39 @@ class VoiceChatService {
     });
   }
 
+  async pauseConversation() {
+    if (!this.connected || !this.roomName) {
+      this.activeCharacterId = null;
+      return;
+    }
+
+    this.activeCharacterId = null;
+    await ApiService.setCharacterEngagement({
+      roomName: this.roomName,
+      engaged: false,
+    });
+  }
+
   async disconnect() {
+    const roomName = this.roomName;
+
     this.remoteAudioElements.forEach((element) => {
       element.remove();
     });
     this.remoteAudioElements.clear();
 
-    if (this.connected && this.roomName) {
+    if (this.connected && roomName) {
       try {
         await ApiService.setCharacterEngagement({
-          roomName: this.roomName,
+          roomName,
           engaged: false,
+        });
+      } catch (_) {}
+
+      try {
+        await ApiService.endCharacterRoom({
+          roomName,
+          closeRoom: true,
         });
       } catch (_) {}
     }
