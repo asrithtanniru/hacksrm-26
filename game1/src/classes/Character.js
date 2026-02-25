@@ -4,8 +4,9 @@ class Character {
     this.id = config.id;
     this.name = config.name;
     this.spawnPoint = config.spawnPoint;
-    this.atlas = config.atlas;
-    this.defaultFrame = `${this.id}-${config.defaultDirection || 'front'}`;
+    this.atlas = config.spriteAtlas || config.atlas;
+    this.spriteFramePrefix = config.spriteFramePrefix || this.id;
+    this.defaultFrame = `${this.spriteFramePrefix}-${config.defaultDirection || 'front'}`;
     this.defaultMessage = config.defaultMessage;
     
     this.isRoaming = config.canRoam !== false; 
@@ -45,7 +46,7 @@ class Character {
         anims.create({
           key: animKey,
           frames: anims.generateFrameNames(this.atlas, {
-            prefix: `${this.id}-${direction}-walk-`,
+            prefix: `${this.spriteFramePrefix}-${direction}-walk-`,
             end: 8,
             zeroPad: 4,
           }),
@@ -61,9 +62,9 @@ class Character {
     const dy = player.y - this.sprite.y;
     
     if (Math.abs(dx) > Math.abs(dy)) {
-      this.sprite.setTexture(this.atlas, `${this.id}-${dx < 0 ? 'left' : 'right'}`);
+      this.sprite.setTexture(this.atlas, `${this.spriteFramePrefix}-${dx < 0 ? 'left' : 'right'}`);
     } else {
-      this.sprite.setTexture(this.atlas, `${this.id}-${dy < 0 ? 'back' : 'front'}`);
+      this.sprite.setTexture(this.atlas, `${this.spriteFramePrefix}-${dy < 0 ? 'back' : 'front'}`);
     }
   }
   
@@ -95,7 +96,7 @@ class Character {
       if (this.scene.anims.exists(animKey)) {
         this.sprite.anims.play(animKey);
       } else {
-        this.sprite.setTexture(this.atlas, `${this.id}-${this.getDirectionFromMovement()}`);
+        this.sprite.setTexture(this.atlas, `${this.spriteFramePrefix}-${this.getDirectionFromMovement()}`);
       }
       
       this.moveDuration = Phaser.Math.Between(500, 1000);
@@ -108,7 +109,7 @@ class Character {
       this.sprite.anims.stop();
       
       const direction = ['front', 'back', 'left', 'right'][Math.floor(Math.random() * 4)];
-      this.sprite.setTexture(this.atlas, `${this.id}-${direction}`);
+      this.sprite.setTexture(this.atlas, `${this.spriteFramePrefix}-${direction}`);
       
       this.pauseDuration = Phaser.Math.Between(2000, 6000);
       this.movementTimer = this.scene.time.delayedCall(this.pauseDuration, () => {
@@ -190,7 +191,7 @@ class Character {
       if (this.scene.anims.exists(animKey)) {
         this.sprite.anims.play(animKey);
       } else {
-        this.sprite.setTexture(this.atlas, `${this.id}-${this.getDirectionFromMovement()}`);
+        this.sprite.setTexture(this.atlas, `${this.spriteFramePrefix}-${this.getDirectionFromMovement()}`);
       }
       
       // Add a timer to force direction change if they get stuck

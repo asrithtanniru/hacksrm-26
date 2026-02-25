@@ -14,7 +14,7 @@ export class MainMenu extends Scene {
         const buttonSpacing = 70;
 
         this.createButton(centerX, startY, 'Let\'s Play!', () => {
-            this.scene.start('Game');
+            this.startGameWithName();
         });
 
         this.createButton(centerX, startY + buttonSpacing, 'Instructions', () => {
@@ -24,6 +24,22 @@ export class MainMenu extends Scene {
         this.createButton(centerX, startY + buttonSpacing * 2, 'Support Philoagents', () => {
             window.open('https://github.com/neural-maze/philoagents-course', '_blank');
         });
+    }
+
+    startGameWithName() {
+        const firstAttempt = window.prompt('Enter subject name:');
+        const normalizedFirstAttempt = firstAttempt?.trim();
+
+        if (normalizedFirstAttempt) {
+            this.scene.start('Game', { playerName: normalizedFirstAttempt });
+            return;
+        }
+
+        const secondAttempt = window.prompt('Name cannot be empty. Enter subject name:');
+        const normalizedSecondAttempt = secondAttempt?.trim();
+        const playerName = normalizedSecondAttempt || 'Subject-0';
+
+        this.scene.start('Game', { playerName });
     }
 
     createButton(x, y, text, callback) {
@@ -143,7 +159,7 @@ export class MainMenu extends Scene {
         
         const instructions = [
             'Arrow keys for moving',
-            'SPACE for talking to philosophers',
+            'SPACE for interacting with entities',
             'ESC for closing the dialogue'
         ];
         

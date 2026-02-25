@@ -106,7 +106,7 @@ class WebSocketApiService {
     }
   }
 
-  async sendMessage(philosopher, message, callbacks = {}) {
+  async sendMessage(character, message, callbacks = {}) {
     try {
       if (!this.connected) {
         await this.connect();
@@ -116,11 +116,11 @@ class WebSocketApiService {
 
       this.socket.send(JSON.stringify({
         message: message,
-        philosopher_id: philosopher.id
+        character_id: character.id
       }));
     } catch (error) {
       console.error('Error sending message via WebSocket:', error);
-      return this.getFallbackResponse(philosopher);
+      return this.getFallbackResponse(character);
     }
   }
 
@@ -144,7 +144,7 @@ class WebSocketApiService {
     }
   }
 
-  getFallbackResponse(philosopher) {
+  getFallbackResponse(character) {
     return "I'm so tired right now, I can't talk. I'm going to sleep now.";
   }
 

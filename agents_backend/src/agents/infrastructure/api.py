@@ -42,24 +42,43 @@ app.add_middleware(
 
 class ChatMessage(BaseModel):
     message: str
-    philosopher_id: str
+    character_id: str | None = None
+    philosopher_id: str | None = None
+
+
+def _resolve_character_id(
+    character_id: str | None, philosopher_id: str | None
+) -> str:
+    if character_id:
+        return character_id
+    if philosopher_id:
+        return philosopher_id
+    raise HTTPException(
+        status_code=400, detail="Missing required field: character_id"
+    )
 
 
 @app.post("/chat")
 async def chat(chat_message: ChatMessage):
+    character_id = _resolve_character_id(
+        chat_message.character_id, chat_message.philosopher_id
+    )
+
     try:
         charter_factory = PhilosopherFactory()
-        philosopher = charter_factory.get_philosopher(chat_message.philosopher_id)
+        philosopher = charter_factory.get_character(character_id)
 
         response, _ = await get_response(
             messages=chat_message.message,
-            philosopher_id=chat_message.philosopher_id,
+            philosopher_id=character_id,
             philosopher_name=philosopher.name,
             philosopher_perspective=philosopher.perspective,
             philosopher_style=philosopher.style,
             philosopher_context="",
         )
         return {"response": response}
+    except HTTPException:
+        raise
     except Exception as e:
         opik_tracer = OpikTracer()
         opik_tracer.flush()
@@ -75,24 +94,23 @@ async def websocket_chat(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
 
-            if "message" not in data or "philosopher_id" not in data:
+            character_id = data.get("character_id") or data.get("philosopher_id")
+            if "message" not in data or not character_id:
                 await websocket.send_json(
                     {
-                        "error": "Invalid message format. Required fields: 'message' and 'philosopher_id'"
+                        "error": "Invalid message format. Required fields: 'message' and 'character_id'"
                     }
                 )
                 continue
 
             try:
                 charter_factory = PhilosopherFactory()
-                philosopher = charter_factory.get_philosopher(
-                    data["philosopher_id"]
-                )
+                philosopher = charter_factory.get_character(character_id)
 
                 # Use streaming response instead of get_response
                 response_stream = get_streaming_response(
                     messages=data["message"],
-                    philosopher_id=data["philosopher_id"],
+                    philosopher_id=character_id,
                     philosopher_name=philosopher.name,
                     philosopher_perspective=philosopher.perspective,
                     philosopher_style=philosopher.style,
