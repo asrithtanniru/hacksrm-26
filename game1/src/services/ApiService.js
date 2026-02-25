@@ -99,6 +99,23 @@ class ApiService {
     });
   }
 
+  async endCharacterRoom({ roomName, closeRoom = true, dispatchId = null }) {
+    return this.request('/livekit/character/end', 'POST', {
+      room_name: roomName,
+      close_room: Boolean(closeRoom),
+      dispatch_id: dispatchId,
+    });
+  }
+
+  async listLivekitCharacters() {
+    try {
+      return await this.request('/livekit/characters', 'GET');
+    } catch (_) {
+      // Backward compatibility if an older backend exposes unprefixed route.
+      return this.request('/characters', 'GET');
+    }
+  }
+
   getFallbackResponse(character) {
     return `I'm sorry, ${character.name || 'the character'} is unavailable at the moment. Please try again later.`;
   }

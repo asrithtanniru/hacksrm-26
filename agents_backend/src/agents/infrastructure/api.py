@@ -2,23 +2,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from opik.integrations.langchain import OpikTracer
 from pydantic import BaseModel
 
-from agents.application.conversation_service.generate_response import (
-    get_response,
-    get_streaming_response,
-)
-from agents.application.conversation_service.reset_conversation import (
-    reset_conversation_state,
-)
-from agents.domain.philosopher_factory import PhilosopherFactory
-from agents.infrastructure.token_server import token_router
-
-from .opik_utils import configure
 from .token_server import token_router
-
-configure()
 
 
 @asynccontextmanager
@@ -26,9 +12,6 @@ async def lifespan(app: FastAPI):
     """Handles startup and shutdown events for the API."""
     # Startup code (if any) goes here
     yield
-    # Shutdown code goes here
-    opik_tracer = OpikTracer()
-    opik_tracer.flush()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -41,6 +24,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(token_router)
+
+
+@app.get("/debug/routes")
+async def debug_routes():
+    return {
+        "routes": [
+            {
+                "path": route.path,
+                "name": route.name,
+                "methods": sorted(route.methods) if getattr(route, "methods", None) else [],
+            }
+            for route in app.routes
+        ]
+    }
 
 
 class ChatMessage(BaseModel):
@@ -77,9 +74,6 @@ def _resolve_character_id(
 #         )
 #         return {"response": response}
 #     except Exception as e:
-#         opik_tracer = OpikTracer()
-#         opik_tracer.flush()
-
 #         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -101,6 +95,11 @@ async def websocket_chat(websocket: WebSocket):
                 continue
 
             try:
+                from agents.application.conversation_service.generate_response import (
+                    get_streaming_response,
+                )
+                from agents.domain.philosopher_factory import PhilosopherFactory
+
                 charter_factory = PhilosopherFactory()
                 philosopher = charter_factory.get_character(character_id)
 
@@ -128,9 +127,6 @@ async def websocket_chat(websocket: WebSocket):
                 )
 
             except Exception as e:
-                opik_tracer = OpikTracer()
-                opik_tracer.flush()
-
                 await websocket.send_json({"error": str(e)})
 
     except WebSocketDisconnect:
@@ -147,6 +143,10 @@ async def reset_conversation():
         dict: A dictionary containing the result of the reset operation.
     """
     try:
+        from agents.application.conversation_service.reset_conversation import (
+            reset_conversation_state,
+        )
+
         result = await reset_conversation_state()
         return result
     except Exception as e:

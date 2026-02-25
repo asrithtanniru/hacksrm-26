@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import json
 import os
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -12,7 +15,12 @@ try:
     from livekit.api.twirp_client import TwirpError
     from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
     from livekit.protocol.models import DataPacket
-    from livekit.protocol.room import DeleteRoomRequest, SendDataRequest
+    from livekit.protocol.room import (
+        CreateRoomRequest,
+        DeleteRoomRequest,
+        ListRoomsRequest,
+        SendDataRequest,
+    )
 except Exception as e:
     raise RuntimeError(
         "livekit package is required. Install with: pip install livekit-api"
@@ -20,36 +28,10 @@ except Exception as e:
 
 
 _AGENT_INFO_PATH = Path(__file__).resolve().parents[1] / "agent_info" / "agent_info.json"
+_BACKEND_ROOT = Path(__file__).resolve().parents[3]
 
-
-def _load_characters() -> dict[str, dict[str, Any]]:
-    with _AGENT_INFO_PATH.open("r", encoding="utf-8") as file:
-        data = json.load(file)
-
-    characters: dict[str, dict[str, Any]] = {}
-    for agent_type, entries in data.items():
-        for entry in entries:
-            token = str(entry.get("id", "")).strip()
-            if not token:
-                continue
-            characters[token.lower()] = {"agent_type": agent_type, **entry}
-
-    return characters
-
-
-def _resolve_character_token(character_token: str) -> str:
-    token = character_token.strip().lower()
-    if not token:
-        raise HTTPException(status_code=400, detail="character_token is required")
-
-    characters = _load_characters()
-    if token not in characters:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Unknown character_token '{character_token}'",
-        )
-
-    return token
+load_dotenv(_BACKEND_ROOT / ".env.local")
+load_dotenv(_BACKEND_ROOT / ".env")
 
 
 class TokenRequest(BaseModel):
@@ -96,6 +78,13 @@ class CharacterEngagementRequest(BaseModel):
 token_router = APIRouter(prefix="/livekit", tags=["livekit"])
 
 
+def _get_livekit_server_url() -> str:
+    livekit_url = os.getenv("LIVEKIT_URL", "").strip()
+    if not livekit_url:
+        raise HTTPException(status_code=500, detail="Missing LIVEKIT_URL in environment.")
+    return livekit_url
+
+
 def _get_livekit_credentials() -> tuple[str, str]:
     api_key = os.getenv("LIVEKIT_API_KEY", "").strip()
     api_secret = os.getenv("LIVEKIT_API_SECRET", "").strip()
@@ -109,14 +98,56 @@ def _get_livekit_credentials() -> tuple[str, str]:
     return api_key, api_secret
 
 
-def _get_livekit_url() -> str:
-    livekit_url = os.getenv("LIVEKIT_URL", "").strip()
-    if not livekit_url:
+def _create_livekit_api() -> api.LiveKitAPI:
+    livekit_url = _get_livekit_server_url()
+    api_key, api_secret = _get_livekit_credentials()
+    return api.LiveKitAPI(
+        url=livekit_url,
+        api_key=api_key,
+        api_secret=api_secret,
+    )
+
+
+def _load_characters() -> dict[str, dict[str, Any]]:
+    with _AGENT_INFO_PATH.open("r", encoding="utf-8") as file:
+        data = json.load(file)
+
+    characters: dict[str, dict[str, Any]] = {}
+    for agent_type, entries in data.items():
+        for entry in entries:
+            token = str(entry.get("id", "")).strip()
+            if not token:
+                continue
+            characters[token.lower()] = {"agent_type": agent_type, **entry}
+
+    return characters
+
+
+def _resolve_character_token(character_token: str) -> str:
+    token = character_token.strip().lower()
+    if not token:
+        raise HTTPException(status_code=400, detail="character_token is required")
+
+    characters = _load_characters()
+    if token not in characters:
         raise HTTPException(
-            status_code=500,
-            detail="Missing LIVEKIT_URL in environment.",
+            status_code=404,
+            detail=f"Unknown character_token '{character_token}'",
         )
-    return livekit_url
+
+    return token
+
+
+async def _ensure_room_exists(lkapi: api.LiveKitAPI, room_name: str) -> None:
+    rooms = await lkapi.room.list_rooms(ListRoomsRequest(names=[room_name]))
+    if rooms.rooms:
+        return
+
+    try:
+        await lkapi.room.create_room(CreateRoomRequest(name=room_name))
+    except TwirpError as err:
+        if err.code != "already_exists":
+            raise
 
 
 def _build_join_token(
@@ -128,6 +159,7 @@ def _build_join_token(
     ttl_minutes: int,
 ) -> str:
     api_key, api_secret = _get_livekit_credentials()
+
     token_builder = (
         api.AccessToken(api_key=api_key, api_secret=api_secret)
         .with_identity(identity)
@@ -193,8 +225,7 @@ def create_livekit_token(payload: TokenRequest) -> dict[str, str]:
     if payload.metadata:
         token_builder = token_builder.with_metadata(payload.metadata)
 
-    jwt_token = token_builder.to_jwt()
-    return {"token": jwt_token, "url": _get_livekit_url()}
+    return {"token": token_builder.to_jwt()}
 
 
 @token_router.post("/character/launch")
@@ -202,7 +233,9 @@ async def launch_character(payload: CharacterLaunchRequest) -> dict[str, Any]:
     character_token = _resolve_character_token(payload.character_token)
     dispatch_metadata = json.dumps({"character_token": character_token}, ensure_ascii=True)
 
-    async with api.LiveKitAPI() as lkapi:
+    async with _create_livekit_api() as lkapi:
+        await _ensure_room_exists(lkapi, payload.room_name)
+
         if payload.replace_existing_dispatches:
             existing = await lkapi.agent_dispatch.list_dispatch(payload.room_name)
             for dispatch in existing:
@@ -224,7 +257,8 @@ async def launch_character(payload: CharacterLaunchRequest) -> dict[str, Any]:
         "dispatch_id": dispatch.id,
         "agent_name": payload.agent_name,
         "character_token": character_token,
-        "url": _get_livekit_url(),
+        "livekit_url": _get_livekit_server_url(),
+        "url": _get_livekit_server_url(),
     }
 
     if payload.user_identity:
@@ -243,15 +277,19 @@ async def launch_character(payload: CharacterLaunchRequest) -> dict[str, Any]:
 async def switch_character(payload: CharacterSwitchRequest) -> dict[str, Any]:
     character_token = _resolve_character_token(payload.character_token)
 
-    async with api.LiveKitAPI() as lkapi:
+    async with _create_livekit_api() as lkapi:
         if payload.mode == "redispatch":
-            if payload.replace_existing_dispatches:
-                existing = await lkapi.agent_dispatch.list_dispatch(payload.room_name)
-                for dispatch in existing:
-                    await lkapi.agent_dispatch.delete_dispatch(
-                        dispatch_id=dispatch.id,
-                        room_name=payload.room_name,
-                    )
+            try:
+                if payload.replace_existing_dispatches:
+                    existing = await lkapi.agent_dispatch.list_dispatch(payload.room_name)
+                    for dispatch in existing:
+                        await lkapi.agent_dispatch.delete_dispatch(
+                            dispatch_id=dispatch.id,
+                            room_name=payload.room_name,
+                        )
+            except TwirpError as err:
+                if err.code != "not_found":
+                    raise
 
             dispatch = await lkapi.agent_dispatch.create_dispatch(
                 CreateAgentDispatchRequest(
@@ -301,21 +339,25 @@ async def switch_character(payload: CharacterSwitchRequest) -> dict[str, Any]:
 async def end_character(payload: CharacterEndRequest) -> dict[str, Any]:
     deleted_dispatches = 0
 
-    async with api.LiveKitAPI() as lkapi:
-        if payload.dispatch_id:
-            await lkapi.agent_dispatch.delete_dispatch(
-                dispatch_id=payload.dispatch_id,
-                room_name=payload.room_name,
-            )
-            deleted_dispatches = 1
-        else:
-            dispatches = await lkapi.agent_dispatch.list_dispatch(payload.room_name)
-            for dispatch in dispatches:
+    async with _create_livekit_api() as lkapi:
+        try:
+            if payload.dispatch_id:
                 await lkapi.agent_dispatch.delete_dispatch(
-                    dispatch_id=dispatch.id,
+                    dispatch_id=payload.dispatch_id,
                     room_name=payload.room_name,
                 )
-                deleted_dispatches += 1
+                deleted_dispatches = 1
+            else:
+                dispatches = await lkapi.agent_dispatch.list_dispatch(payload.room_name)
+                for dispatch in dispatches:
+                    await lkapi.agent_dispatch.delete_dispatch(
+                        dispatch_id=dispatch.id,
+                        room_name=payload.room_name,
+                    )
+                    deleted_dispatches += 1
+        except TwirpError as err:
+            if err.code != "not_found":
+                raise
 
         room_closed = False
         if payload.close_room:
@@ -325,7 +367,7 @@ async def end_character(payload: CharacterEndRequest) -> dict[str, Any]:
             except TwirpError as err:
                 if err.code != "not_found":
                     raise
-
+    
     return {
         "room_name": payload.room_name,
         "deleted_dispatches": deleted_dispatches,
@@ -345,7 +387,7 @@ async def set_character_engagement(
     if character_token is not None:
         packet["character_token"] = character_token
 
-    async with api.LiveKitAPI() as lkapi:
+    async with _create_livekit_api() as lkapi:
         try:
             await lkapi.room.send_data(
                 SendDataRequest(

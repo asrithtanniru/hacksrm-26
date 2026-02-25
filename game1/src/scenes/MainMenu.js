@@ -1,4 +1,5 @@
 import { Scene } from 'phaser';
+import ApiService from '../services/ApiService';
 
 export class MainMenu extends Scene {
     constructor() {
@@ -26,20 +27,70 @@ export class MainMenu extends Scene {
         });
     }
 
-    startGameWithName() {
+    async startGameWithName() {
         const firstAttempt = window.prompt('Enter subject name:');
         const normalizedFirstAttempt = firstAttempt?.trim();
 
-        if (normalizedFirstAttempt) {
-            this.scene.start('Game', { playerName: normalizedFirstAttempt });
-            return;
+        let playerName = normalizedFirstAttempt;
+        if (!playerName) {
+            const secondAttempt = window.prompt('Name cannot be empty. Enter subject name:');
+            const normalizedSecondAttempt = secondAttempt?.trim();
+            playerName = normalizedSecondAttempt || 'Subject-0';
         }
 
-        const secondAttempt = window.prompt('Name cannot be empty. Enter subject name:');
-        const normalizedSecondAttempt = secondAttempt?.trim();
-        const playerName = normalizedSecondAttempt || 'Subject-0';
+        const startPayload = { playerName };
 
-        this.scene.start('Game', { playerName });
+        try {
+            const roomName = `quiet-protocol-session-${playerName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+            const identity = `subject-${Date.now()}`;
+
+            // 1) First call must be token API.
+            const tokenResponse = await ApiService.createLivekitToken({
+                roomName,
+                identity,
+                name: playerName,
+                metadata: JSON.stringify({ player_name: playerName, role: 'subject' }),
+                ttlMinutes: 60,
+            });
+
+            // 2) Then fetch live character list.
+            const charactersResponse = await ApiService.listLivekitCharacters();
+            const availableCharacters = Array.isArray(charactersResponse?.characters)
+                ? charactersResponse.characters
+                : [];
+            startPayload.availableCharacters = availableCharacters;
+
+            // 3) Then launch selected/default character agent.
+            if (availableCharacters.length > 0) {
+                const defaultCharacter = availableCharacters[0];
+                const launchResponse = await ApiService.launchCharacterRoom({
+                    roomName,
+                    characterToken: defaultCharacter.character_token,
+                    userIdentity: identity,
+                    userName: playerName,
+                    replaceExistingDispatches: true,
+                });
+
+                startPayload.launchBootstrap = {
+                    roomName,
+                    characterToken: defaultCharacter.character_token,
+                    userToken: launchResponse?.user_token || tokenResponse?.token || null,
+                    url: launchResponse?.livekit_url || launchResponse?.url || null,
+                };
+            } else {
+                startPayload.launchBootstrap = {
+                    roomName,
+                    characterToken: null,
+                    userToken: tokenResponse?.token || null,
+                    url: tokenResponse?.url || null,
+                };
+            }
+        } catch (error) {
+            // Non-blocking bootstrapping. Game can still start and launch lazily.
+            console.warn('LiveKit prelaunch failed at start flow:', error);
+        }
+
+        this.scene.start('Game', startPayload);
     }
 
     createButton(x, y, text, callback) {

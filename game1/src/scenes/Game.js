@@ -29,12 +29,39 @@ export class Game extends Scene
         this.menuButton = null;
         this.logoutButton = null;
         this.menuPanel = null;
+        this.voiceRoomName = null;
+        this.voiceBootstrapped = false;
+        this.availableCharacterTokens = new Set();
+        this.fallbackCharacterToken = null;
     }
 
     init (data)
     {
         const rawPlayerName = data?.playerName;
         this.playerName = rawPlayerName?.trim() || 'Subject-0';
+        const launchBootstrap = data?.launchBootstrap || null;
+        const availableCharacters = Array.isArray(data?.availableCharacters) ? data.availableCharacters : [];
+        this.availableCharacterTokens = new Set(
+            availableCharacters
+                .map((item) => item?.character_token)
+                .filter(Boolean)
+        );
+        this.fallbackCharacterToken = availableCharacters[0]?.character_token || null;
+
+        const roomSlug = this.playerName
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '');
+        this.voiceRoomName = launchBootstrap?.roomName || `quiet-protocol-session-${roomSlug || 'subject'}`;
+
+        if (launchBootstrap?.userToken && launchBootstrap?.url) {
+            VoiceChatService.primeLaunchSession({
+                roomName: this.voiceRoomName,
+                characterToken: launchBootstrap?.characterToken || this.fallbackCharacterToken,
+                userToken: launchBootstrap.userToken,
+                url: launchBootstrap.url,
+            });
+        }
     }
 
     create ()
@@ -54,6 +81,7 @@ export class Game extends Scene
         this.createNpcDistancePanel();
         this.createVoiceStatusPanel();
         this.createTopBarUi();
+        this.initializeVoiceSession();
 
         this.events.on('shutdown', this.handleSceneShutdown, this);
     }
@@ -259,8 +287,16 @@ export class Game extends Scene
 
             character.interactionDistance = config.interactionDistance || 55;
             character.proximityScript = config.proximityScript || [];
-            character.backendToken = config.backendToken || config.id;
-            character.voiceRoomName = `quiet-protocol-${character.id}`;
+            const preferredToken = config.backendToken || config.id;
+            if (
+                this.availableCharacterTokens.size > 0
+                && !this.availableCharacterTokens.has(preferredToken)
+                && this.fallbackCharacterToken
+            ) {
+                character.backendToken = this.fallbackCharacterToken;
+            } else {
+                character.backendToken = preferredToken;
+            }
 
             this.characters.push(character);
         });
@@ -313,7 +349,7 @@ export class Game extends Scene
         try {
             this.showVoiceStatus(`Connecting voice: ${character.name}...`, 'neutral');
             await VoiceChatService.connectToCharacter({
-                roomName: character.voiceRoomName,
+                roomName: this.voiceRoomName,
                 characterId: character.backendToken,
                 playerName: this.playerName
             });
@@ -323,6 +359,24 @@ export class Game extends Scene
             console.error('Voice connection failed', error);
             this.voiceConnectedCharacterId = null;
             this.showVoiceStatus(`Voice connect failed: ${error.message}`, 'error');
+        }
+    }
+
+    async pauseVoice(reason = '') {
+        if (!VoiceChatService.isConnected) {
+            this.voiceConnectedCharacterId = null;
+            return;
+        }
+
+        this.voiceConnectedCharacterId = null;
+        try {
+            await VoiceChatService.pauseConversation();
+        } catch (error) {
+            console.warn('Voice pause error', error);
+        } finally {
+            if (reason) {
+                this.showVoiceStatus(reason, 'neutral');
+            }
         }
     }
 
@@ -391,7 +445,7 @@ export class Game extends Scene
             lineSpacing: 5
         });
 
-        const hintText = this.add.text(boxX + boxWidth - 12, boxY + boxHeight - 8, 'Press A to connect voice', {
+        const hintText = this.add.text(boxX + boxWidth - 12, boxY + boxHeight - 8, 'Press A to talk', {
             font: '12px monospace',
             color: '#ffd28f'
         }).setOrigin(1, 1);
@@ -417,7 +471,7 @@ export class Game extends Scene
 
         this.proximityDialogue.nameText.setText(`◆ ${character.name}`);
         this.proximityDialogue.bodyText.setText(scriptLines.join('\n'));
-        this.proximityDialogue.hintText.setText('Press A to connect voice');
+        this.proximityDialogue.hintText.setText('Press A to talk');
         this.proximityDialogue.container.setVisible(true);
     }
 
@@ -444,15 +498,12 @@ export class Game extends Scene
 
         if (!nearbyCharacter) {
             if (this.voiceConnectedCharacterId) {
-                this.disconnectVoice('Voice disconnected: moved away from character');
+                this.pauseVoice('Voice paused: moved away from character');
             }
             return;
         }
 
-        if (
-            Phaser.Input.Keyboard.JustDown(this.connectKey) ||
-            Phaser.Input.Keyboard.JustDown(this.interactKey)
-        ) {
+        if (Phaser.Input.Keyboard.JustDown(this.connectKey)) {
             this.hideProximityDialogue();
             this.connectVoiceForCharacter(nearbyCharacter);
         }
@@ -614,6 +665,28 @@ export class Game extends Scene
 
     handleSceneShutdown() {
         this.disconnectVoice();
+    }
+
+    async initializeVoiceSession() {
+        if (this.voiceBootstrapped || this.characters.length === 0) {
+            return;
+        }
+
+        this.voiceBootstrapped = true;
+        const initialCharacter = this.characters[0];
+        try {
+            this.showVoiceStatus('Initializing voice session...', 'neutral');
+            await VoiceChatService.ensureConnected({
+                roomName: this.voiceRoomName,
+                playerName: this.playerName,
+                initialCharacterId: initialCharacter.backendToken,
+            });
+            this.showVoiceStatus('Voice ready. Press A near an NPC to talk.', 'ok');
+        } catch (error) {
+            console.error('Voice bootstrap failed', error);
+            this.voiceBootstrapped = false;
+            this.showVoiceStatus(`Voice init failed: ${error.message}`, 'error');
+        }
     }
 
     updateNpcDistancePanel() {

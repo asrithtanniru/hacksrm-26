@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,8 +21,30 @@ load_dotenv(_ROOT / '.env')
 
 _AGENT_INFO_PATH = _ROOT / 'src' / 'agents' / 'agent_info' / 'agent_info.json'
 _DEFAULT_CHARACTER_TOKEN = os.getenv('NPC_DEFAULT_CHARACTER_TOKEN', 'common1').strip().lower()
-_DEFAULT_VOICE = os.getenv('NPC_DEFAULT_VOICE', 'Rachel').strip() or 'Rachel'
+# ElevenLabs LiveKit plugin expects voice_id, not voice name.
+_DEFAULT_VOICE_ID = os.getenv('NPC_DEFAULT_VOICE_ID', '7DkaWvcqvBstUe3167oW').strip() or '7DkaWvcqvBstUe3167oW'
 _AUTO_GREET = os.getenv('NPC_AUTO_GREET', 'false').strip().lower() == 'true'
+_LOGGER_PATH = _ROOT / 'logs.log'
+
+
+def _create_logger() -> logging.Logger:
+    _LOGGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger('quiet_protocol_multi_character')
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    logger.propagate = False
+
+    handler = logging.FileHandler(_LOGGER_PATH, encoding='utf-8')
+    formatter = logging.Formatter(
+        fmt='%(asctime)s | %(levelname)s | %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    return logger
+
+
+APP_LOGGER = _create_logger()
 
 
 @dataclass(frozen=True)
@@ -155,21 +178,58 @@ async def npc_router(ctx: agents.JobContext):
     session = AgentSession(
         stt=deepgram.STT(model='nova-3', language='en-US'),
         llm='openai/gpt-4.1-mini',
-        tts=elevenlabs.TTS(voice=_DEFAULT_VOICE, model='eleven_monolingual_v1'),
+        tts=elevenlabs.TTS(voice_id=_DEFAULT_VOICE_ID, model='eleven_monolingual_v1'),
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
     )
 
+    APP_LOGGER.info(
+        "session_start room=%s job=%s initial_character=%s",
+        getattr(ctx.room, 'name', 'unknown'),
+        getattr(ctx.job, 'id', 'unknown'),
+        initial_profile.token,
+    )
+
+    def _hard_stop_current_turn() -> None:
+        # Prevent carry-over speech/transcript when disengaging or switching character.
+        try:
+            session.clear_user_turn()
+        except Exception:
+            APP_LOGGER.exception(
+                "clear_user_turn_failed room=%s character=%s",
+                getattr(ctx.room, 'name', 'unknown'),
+                state.get('token'),
+            )
+        try:
+            session.interrupt(force=True)
+        except Exception:
+            APP_LOGGER.exception(
+                "interrupt_failed room=%s character=%s",
+                getattr(ctx.room, 'name', 'unknown'),
+                state.get('token'),
+            )
+
     def _switch_profile(token: str) -> None:
         profile = _resolve_profile(token)
         if state['token'] == profile.token:
+            APP_LOGGER.info(
+                "switch_skipped_same_character room=%s character=%s",
+                getattr(ctx.room, 'name', 'unknown'),
+                profile.token,
+            )
             return
 
+        _hard_stop_current_turn()
         state['token'] = profile.token
         session.update_agent(CharacterAgent(profile))
+        APP_LOGGER.info(
+            "switch_profile room=%s character=%s",
+            getattr(ctx.room, 'name', 'unknown'),
+            profile.token,
+        )
 
         if hasattr(session.tts, 'update_options'):
-            session.tts.update_options(voice=_DEFAULT_VOICE)
+            session.tts.update_options(voice_id=_DEFAULT_VOICE_ID)
 
     def _set_engagement(engaged: bool, token: str | None = None) -> None:
         if engaged:
@@ -180,14 +240,25 @@ async def npc_router(ctx: agents.JobContext):
             state['engaged'] = True
             if state['locked_token'] is None:
                 state['locked_token'] = state['token']
+            APP_LOGGER.info(
+                "engagement_on room=%s character=%s",
+                getattr(ctx.room, 'name', 'unknown'),
+                state.get('locked_token') or state.get('token'),
+            )
             return
 
+        _hard_stop_current_turn()
         state['engaged'] = False
         state['locked_token'] = None
         pending = state['pending_token']
         state['pending_token'] = None
         if pending:
             _switch_profile(pending)
+        APP_LOGGER.info(
+            "engagement_off room=%s next_pending=%s",
+            getattr(ctx.room, 'name', 'unknown'),
+            pending or '',
+        )
 
     @ctx.room.on('data_received')
     def _on_data_received(packet: Any):
