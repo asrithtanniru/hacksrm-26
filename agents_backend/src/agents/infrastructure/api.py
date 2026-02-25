@@ -13,6 +13,7 @@ from agents.application.conversation_service.reset_conversation import (
     reset_conversation_state,
 )
 from agents.domain.philosopher_factory import PhilosopherFactory
+from agents.infrastructure.token_server import token_router
 
 from .opik_utils import configure
 
@@ -38,6 +39,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(token_router)
 
 
 class ChatMessage(BaseModel):
@@ -58,32 +60,26 @@ def _resolve_character_id(
     )
 
 
-@app.post("/chat")
-async def chat(chat_message: ChatMessage):
-    character_id = _resolve_character_id(
-        chat_message.character_id, chat_message.philosopher_id
-    )
+# @app.post("/chat")
+# async def chat(chat_message: ChatMessage):
+#     try:
+#         charter_factory = PhilosopherFactory()
+#         philosopher = charter_factory.get_philosopher(chat_message.philosopher_id)
 
-    try:
-        charter_factory = PhilosopherFactory()
-        philosopher = charter_factory.get_character(character_id)
+#         response, _ = await get_response(
+#             messages=chat_message.message,
+#             philosopher_id=chat_message.philosopher_id,
+#             philosopher_name=philosopher.name,
+#             philosopher_perspective=philosopher.perspective,
+#             philosopher_style=philosopher.style,
+#             philosopher_context="",
+#         )
+#         return {"response": response}
+#     except Exception as e:
+#         opik_tracer = OpikTracer()
+#         opik_tracer.flush()
 
-        response, _ = await get_response(
-            messages=chat_message.message,
-            philosopher_id=character_id,
-            philosopher_name=philosopher.name,
-            philosopher_perspective=philosopher.perspective,
-            philosopher_style=philosopher.style,
-            philosopher_context="",
-        )
-        return {"response": response}
-    except HTTPException:
-        raise
-    except Exception as e:
-        opik_tracer = OpikTracer()
-        opik_tracer.flush()
-
-        raise HTTPException(status_code=500, detail=str(e))
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.websocket("/ws/chat")
