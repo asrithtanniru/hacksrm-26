@@ -116,6 +116,18 @@ class ApiService {
     }
   }
 
+  async startGameChallenge(payload) {
+    return this.request('/game/challenge/start', 'POST', payload);
+  }
+
+  async recordNpcTalk(payload) {
+    return this.request('/game/challenge/npc-talk', 'POST', payload);
+  }
+
+  async getGameChallengeProgress(playerAddress) {
+    return this.request(`/game/challenge/progress?player_address=${encodeURIComponent(playerAddress)}`, 'GET');
+  }
+
   getFallbackResponse(character) {
     return `I'm sorry, ${character.name || 'the character'} is unavailable at the moment. Please try again later.`;
   }

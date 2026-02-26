@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from .rewards_service import rewards_service
 from .token_server import token_router
 
 
@@ -44,6 +46,19 @@ class ChatMessage(BaseModel):
     message: str
     character_id: str | None = None
     philosopher_id: str | None = None
+
+
+class ChallengeStartRequest(BaseModel):
+    player_address: str
+    room_name: str
+    session_id: str
+
+
+class NpcTalkRequest(BaseModel):
+    player_address: str
+    npc_id: str
+    room_name: str
+    engagement_ms: int = 0
 
 
 def _resolve_character_id(
@@ -151,6 +166,46 @@ async def reset_conversation():
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/game/challenge/start")
+async def start_game_challenge(payload: ChallengeStartRequest):
+    result = rewards_service.start_challenge_session(
+        player_address=payload.player_address,
+        room_name=payload.room_name,
+        session_id=payload.session_id,
+    )
+    return {
+        "ok": True,
+        "challenge_started": result["challenge_started"],
+        "txHash": result["txHash"],
+        "progress": result["progress"],
+        "contractAddress": os.getenv("GAME_CONTRACT_ADDRESS", "").strip(),
+    }
+
+
+@app.post("/game/challenge/npc-talk")
+async def record_game_npc_talk(payload: NpcTalkRequest):
+    result = rewards_service.record_npc_talk(
+        player_address=payload.player_address,
+        npc_id=payload.npc_id,
+        room_name=payload.room_name,
+        engagement_ms=payload.engagement_ms,
+    )
+    return {
+        "ok": True,
+        "accepted": result["accepted"],
+        "txHash": result["txHash"],
+        "progress": result["progress"],
+        "contractAddress": os.getenv("GAME_CONTRACT_ADDRESS", "").strip(),
+    }
+
+
+@app.get("/game/challenge/progress")
+async def get_game_challenge_progress(player_address: str):
+    result = rewards_service.get_progress(player_address)
+    result["contractAddress"] = os.getenv("GAME_CONTRACT_ADDRESS", "").strip()
+    return result
 
 
 if __name__ == "__main__":

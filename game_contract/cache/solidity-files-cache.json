@@ -1,0 +1,85 @@
+{
+  "_format": "hh-sol-cache-2",
+  "files": {
+    "/Users/anuragtummapudi/Quai-contract/Quai-Network-Contract-Deploy-Example/contracts/QuaiGameRewards.sol": {
+      "lastModificationDate": 1772073842276,
+      "contentHash": "9a39fb290caea218d2bd833a254db057",
+      "sourceName": "contracts/QuaiGameRewards.sol",
+      "solcConfig": {
+        "version": "0.8.20",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 1000
+          },
+          "metadata": {
+            "bytecodeHash": "ipfs",
+            "useLiteralContent": true
+          },
+          "evmVersion": "london",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "QuaiGameRewards"
+      ]
+    },
+    "/Users/anuragtummapudi/HackSRM/hacksrm-26/game_contract/contracts/QuaiGameRewards.sol": {
+      "lastModificationDate": 1772081247008,
+      "contentHash": "7b25a7056b3e89895e251ccf61d096f4",
+      "sourceName": "contracts/QuaiGameRewards.sol",
+      "solcConfig": {
+        "version": "0.8.20",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 1000
+          },
+          "metadata": {
+            "bytecodeHash": "ipfs",
+            "useLiteralContent": true
+          },
+          "evmVersion": "london",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "QuaiGameRewards"
+      ]
+    }
+  }
+}

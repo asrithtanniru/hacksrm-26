@@ -45,32 +45,31 @@ export class MainMenu extends Scene {
 
   addGameTitle() {
     const centerX = this.cameras.main.width / 2
-    const titleY = this.cameras.main.height / 2
+    const titleY = 84
 
-    const titleText = this.add
-      .text(centerX, titleY, 'Mystic\nWorld', {
-        fontSize: '54px',
+    const glowText = this.add
+      .text(centerX, titleY + 2, 'Mystverse', {
+        fontSize: '72px',
         fontFamily: GAME_FONT_FAMILY,
-        color: '#000000',
+        color: '#0f2942',
         fontStyle: 'bold',
         align: 'center',
-        lineSpacing: 8,
       })
       .setOrigin(0.5)
 
-    const paddingX = 54
-    const paddingY = 30
-    const radius = 44
-    const panelWidth = titleText.width + paddingX * 2
-    const panelHeight = titleText.height + paddingY * 2
+    const titleText = this.add
+      .text(centerX, titleY, 'Mystverse', {
+        fontSize: '72px',
+        fontFamily: GAME_FONT_FAMILY,
+        color: '#e8f7ff',
+        fontStyle: 'bold',
+        stroke: '#123a58',
+        strokeThickness: 10,
+      })
+      .setOrigin(0.5)
+      .setShadow(0, 6, '#07131f', 0.9, false, true)
 
-    const titleBg = this.add.graphics()
-    titleBg.fillStyle(0xffffff, 1)
-    titleBg.fillRoundedRect(centerX - panelWidth / 2, titleY - panelHeight / 2, panelWidth, panelHeight, radius)
-    titleBg.lineStyle(3, 0x000000, 1)
-    titleBg.strokeRoundedRect(centerX - panelWidth / 2, titleY - panelHeight / 2, panelWidth, panelHeight, radius)
-
-    titleBg.setDepth(4)
+    glowText.setDepth(4)
     titleText.setDepth(5)
   }
 

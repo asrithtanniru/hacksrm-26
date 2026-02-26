@@ -2,7 +2,11 @@ import { Scene } from 'phaser';
 import Character from '../classes/Character';
 import DialogueBox from '../classes/DialogueBox';
 import DialogueManager from '../classes/DialogueManager';
+import MissionModal from '../classes/MissionModal';
+import ApiService from '../services/ApiService';
 import VoiceChatService from '../services/VoiceChatService';
+import ContractService from '../services/ContractService';
+import { walletAuthContext } from '../contexts/WalletAuthContext';
 import { gameFont } from '../constants/fonts';
 
 export class Game extends Scene
@@ -39,14 +43,24 @@ export class Game extends Scene
         this.sessionExpired = false;
         this.sessionTimerText = null;
         this.redeemText = null;
-        this.rewardBalance = 0;
-        this.redeemThreshold = 3.0;
-        this.rewardPerNpcVisit = 0.3;
-        this.milestoneNpcCount = 3;
-        this.milestoneBonus = 0.1;
+        this.missionModal = null;
+        this.modalMode = null;
+        this.missionState = {
+            startedAt: 0,
+            endsAt: 0,
+            npcCount: 0,
+            points: 0,
+            completed: false,
+            claimableUnits: 0,
+            expired: false,
+        };
+        this.playerWalletAddress = null;
+        this.challengeSessionId = null;
         this.rewardedNpcIds = new Set();
-        this.rewardMilestonesClaimed = 0;
-        this.requiredEngagementMs = 20 * 1000;
+        this.isRecordingNpcTalk = false;
+        this.completionModalShown = false;
+        this.timeoutModalShown = false;
+        this.requiredEngagementMs = 3 * 1000;
         this.activeVoiceNpcId = null;
         this.activeVoiceStartAt = 0;
     }
@@ -97,10 +111,11 @@ export class Game extends Scene
         this.createNpcDistancePanel();
         this.createVoiceStatusPanel();
         this.createTopBarUi();
-        this.sessionEndsAt = this.time.now + this.sessionDurationMs;
+        this.missionModal = new MissionModal(this);
         this.updateSessionTimerUi();
         this.updateRewardUi();
         this.initializeVoiceSession();
+        this.initializeChallengeFlow();
 
         this.events.on('shutdown', this.handleSceneShutdown, this);
     }
@@ -661,7 +676,7 @@ export class Game extends Scene
             .setDepth(60)
             .setInteractive({ useHandCursor: true });
 
-        this.redeemText = this.add.text(width / 2, 10, 'REDEEM $ 0.0', {
+        this.redeemText = this.add.text(width / 2, 10, 'MISSION 0/9 | CLAIM 0', {
             font: gameFont(13),
             color: '#f6e6a8',
             backgroundColor: '#3a2f12',
@@ -723,9 +738,7 @@ export class Game extends Scene
             this.scene.start('MainMenu');
         });
 
-        this.redeemText.on('pointerdown', () => {
-            this.handleRedeemClick();
-        });
+        this.redeemText.on('pointerdown', () => this.showMissionIntroModal());
     }
 
     formatTimer(ms) {
@@ -739,11 +752,16 @@ export class Game extends Scene
         if (!this.sessionTimerText) {
             return;
         }
-        const remainingMs = Math.max(0, this.sessionEndsAt - this.time.now);
+        const remainingMs = this.missionState.endsAt > 0
+            ? Math.max(0, (this.missionState.endsAt * 1000) - Date.now())
+            : this.sessionDurationMs;
         this.sessionTimerText.setText(`TIME ${this.formatTimer(remainingMs)}`);
         if (remainingMs <= 60000) {
             this.sessionTimerText.setColor('#ffd3d3');
             this.sessionTimerText.setBackgroundColor('#321414');
+        } else {
+            this.sessionTimerText.setColor('#d7ecff');
+            this.sessionTimerText.setBackgroundColor('#0c1a2a');
         }
     }
 
@@ -751,45 +769,127 @@ export class Game extends Scene
         if (!this.redeemText) {
             return;
         }
-        const canRedeem = this.rewardBalance >= this.redeemThreshold;
-        this.redeemText.setText(`REDEEM $ ${this.rewardBalance.toFixed(1)} / ${this.redeemThreshold.toFixed(1)}`);
+        const canRedeem = this.missionState.claimableUnits > 0;
+        this.redeemText.setText(
+            `MISSION ${this.missionState.npcCount}/9 | CLAIM ${this.missionState.claimableUnits}`
+        );
         this.redeemText.setColor(canRedeem ? '#fff1b0' : '#f6e6a8');
         this.redeemText.setBackgroundColor(canRedeem ? '#4a3a11' : '#3a2f12');
     }
 
-    handleRedeemClick() {
-        if (this.rewardBalance < this.redeemThreshold) {
-            const needed = (this.redeemThreshold - this.rewardBalance).toFixed(1);
-            this.showVoiceStatus(`Need ${needed} more token(s) to redeem`, 'neutral');
+    async initializeChallengeFlow() {
+        const walletState = walletAuthContext.getState();
+        if (!walletState?.isConnected || !walletState.address) {
+            this.showVoiceStatus('Connect Pelagus wallet in Main Menu to start challenge', 'error');
+            this.showMissionIntroModal();
+            return;
+        }
+        this.playerWalletAddress = walletState.address;
+        await this.syncProgressFromChain();
+        this.showMissionIntroModal();
+    }
+
+    async startChallengeSessionIfNeeded() {
+        if (this.missionState.startedAt > 0 && !this.missionState.expired && !this.missionState.completed) {
             return;
         }
 
-        this.rewardBalance = Number((this.rewardBalance - this.redeemThreshold).toFixed(1));
-        this.updateRewardUi();
-        console.log(
-            `[RewardRedeem] player=${this.playerName} redeemed=${this.redeemThreshold.toFixed(1)} remaining=${this.rewardBalance.toFixed(1)}`
-        );
-        this.showVoiceStatus(`Redeemed ${this.redeemThreshold.toFixed(1)} token(s)!`, 'ok');
+        if (!this.playerWalletAddress) {
+            const walletState = walletAuthContext.getState();
+            if (!walletState?.isConnected || !walletState.address) {
+                this.showVoiceStatus('Connect Pelagus wallet in Main Menu to start challenge', 'error');
+                return;
+            }
+            this.playerWalletAddress = walletState.address;
+        }
+
+        this.challengeSessionId = `challenge-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+        try {
+            this.showVoiceStatus('Starting mission timer...', 'neutral');
+            const response = await ApiService.startGameChallenge({
+                player_address: this.playerWalletAddress,
+                room_name: this.voiceRoomName,
+                session_id: this.challengeSessionId,
+            });
+            if (response?.contractAddress) {
+                ContractService.setContractAddress(response.contractAddress);
+            }
+            if (response?.progress) {
+                this.applyProgress(response.progress);
+            } else {
+                await this.syncProgressFromChain();
+            }
+            this.sessionExpired = false;
+            this.timeoutModalShown = false;
+            this.completionModalShown = false;
+            this.rewardedNpcIds.clear();
+            this.showVoiceStatus('Mission started. Gather clues by talking to NPCs.', 'ok');
+        } catch (error) {
+            console.error('Failed to start challenge session', error);
+            this.showVoiceStatus(`Challenge start failed: ${error.message}`, 'error');
+        }
     }
 
-    grantReward(amount, reason) {
-        this.rewardBalance = Number((this.rewardBalance + amount).toFixed(1));
+    async syncProgressFromChain() {
+        if (!this.playerWalletAddress) {
+            return;
+        }
+        try {
+            const apiResult = await ApiService.getGameChallengeProgress(this.playerWalletAddress);
+            if (apiResult?.contractAddress) {
+                ContractService.setContractAddress(apiResult.contractAddress);
+            }
+            const progress = apiResult?.progress || apiResult;
+            if (progress) {
+                this.applyProgress(progress);
+            }
+        } catch (error) {
+            try {
+                const progress = await ContractService.fetchProgress(this.playerWalletAddress);
+                this.applyProgress(progress);
+            } catch (contractError) {
+                console.error('Failed to load challenge progress', contractError);
+                this.showVoiceStatus(`Progress sync failed: ${contractError.message}`, 'error');
+            }
+        }
+    }
+
+    applyProgress(progress) {
+        this.missionState = {
+            startedAt: Number(progress.challengeStartedAt || 0),
+            endsAt: Number(progress.challengeEndsAt || 0),
+            npcCount: Number(progress.npcTalks || 0),
+            points: Number(progress.rewardPoints || 0),
+            completed: Boolean(progress.completed),
+            claimableUnits: Number(progress.claimableUnits || 0),
+            expired: Boolean(progress.expired),
+        };
         this.updateRewardUi();
-        console.log(
-            `[RewardWin] player=${this.playerName} gained=${amount.toFixed(1)} total=${this.rewardBalance.toFixed(1)} reason="${reason}" unique_npcs=${this.rewardedNpcIds.size}`
-        );
+        this.updateSessionTimerUi();
+
+        if (
+            this.missionState.npcCount >= 9
+            && this.missionState.claimableUnits > 0
+            && !this.completionModalShown
+        ) {
+            this.showCompletionModal();
+            this.completionModalShown = true;
+        }
     }
 
     getCharacterById(characterId) {
         return this.characters.find((character) => character.id === characterId) || null;
     }
 
-    updateVoiceEngagementRewards() {
+    async updateVoiceEngagementRewards() {
         if (this.sessionExpired) {
             return;
         }
+        if (this.missionState.startedAt === 0) {
+            return;
+        }
 
-        if (!this.activeVoiceNpcId || this.rewardedNpcIds.has(this.activeVoiceNpcId)) {
+        if (!this.activeVoiceNpcId || this.rewardedNpcIds.has(this.activeVoiceNpcId) || this.isRecordingNpcTalk) {
             return;
         }
 
@@ -803,28 +903,47 @@ export class Game extends Scene
             return;
         }
 
-        this.rewardedNpcIds.add(this.activeVoiceNpcId);
-        this.grantReward(this.rewardPerNpcVisit, `20s engagement with ${connectedCharacter.name}`);
-        this.showVoiceStatus(`Reward unlocked: +${this.rewardPerNpcVisit.toFixed(1)} token`, 'ok');
+        if (!this.playerWalletAddress) {
+            return;
+        }
 
-        const completedMilestones = Math.floor(this.rewardedNpcIds.size / this.milestoneNpcCount);
-        if (completedMilestones > this.rewardMilestonesClaimed) {
-            const bonusSteps = completedMilestones - this.rewardMilestonesClaimed;
-            const milestoneBonusTotal = Number((bonusSteps * this.milestoneBonus).toFixed(1));
-            this.rewardMilestonesClaimed = completedMilestones;
-            this.grantReward(milestoneBonusTotal, `${this.milestoneNpcCount} NPC milestone bonus`);
-            this.showVoiceStatus(`Milestone bonus: +${milestoneBonusTotal.toFixed(1)} token`, 'ok');
+        this.isRecordingNpcTalk = true;
+        this.rewardedNpcIds.add(this.activeVoiceNpcId);
+        try {
+            const response = await ApiService.recordNpcTalk({
+                player_address: this.playerWalletAddress,
+                npc_id: connectedCharacter.id,
+                room_name: this.voiceRoomName,
+                engagement_ms: elapsed,
+            });
+            if (response?.contractAddress) {
+                ContractService.setContractAddress(response.contractAddress);
+            }
+            if (response?.progress) {
+                this.applyProgress(response.progress);
+            } else {
+                await this.syncProgressFromChain();
+            }
+            this.showVoiceStatus(`NPC logged: ${connectedCharacter.name}`, 'ok');
+        } catch (error) {
+            console.warn('NPC talk record failed', error);
+            this.rewardedNpcIds.delete(this.activeVoiceNpcId);
+            if (error?.message?.includes('409')) {
+                await this.syncProgressFromChain();
+            }
+        } finally {
+            this.isRecordingNpcTalk = false;
         }
     }
 
     updateSessionState() {
-        if (this.sessionExpired) {
+        if (this.sessionExpired || this.missionState.endsAt === 0) {
             return;
         }
 
         this.updateSessionTimerUi();
 
-        if (this.time.now < this.sessionEndsAt) {
+        if (Date.now() < this.missionState.endsAt * 1000) {
             return;
         }
 
@@ -832,10 +951,96 @@ export class Game extends Scene
         this.updateSessionTimerUi();
         this.hideProximityDialogue();
         this.disconnectVoice('Session ended');
-        this.showVoiceStatus('5 minute session ended. Returning to menu...', 'neutral');
-        this.time.delayedCall(1500, () => {
-            this.scene.start('MainMenu');
+        if (!this.timeoutModalShown) {
+            this.showTimeoutModal();
+            this.timeoutModalShown = true;
+        }
+    }
+
+    getMissionStatusLine() {
+        const claimText = `${this.missionState.claimableUnits} claimable`;
+        return `Progress: ${this.missionState.npcCount}/9 NPCs | Points: ${this.missionState.points}/3 | ${claimText}`;
+    }
+
+    showMissionIntroModal() {
+        this.modalMode = 'intro';
+        this.missionModal.show({
+            title: 'MISSION PROTOCOL',
+            body: 'Find who committed the murder.\nTalk to NPCs to collect clues.\nEvery 3 unique NPCs = 1 reward point.\nReach 9 NPCs (3 points) to unlock Claim Reward.',
+            status: this.getMissionStatusLine(),
+            showClaim: this.missionState.claimableUnits > 0,
+            onClaim: () => this.handleClaimRewardFromModal(),
+            onClose: async () => {
+                this.modalMode = null;
+                await this.startChallengeSessionIfNeeded();
+            },
         });
+    }
+
+    showTimeoutModal() {
+        this.modalMode = 'timeout';
+        const didComplete = this.missionState.claimableUnits > 0;
+        this.missionModal.show({
+            title: 'TIME WINDOW ENDED',
+            body: didComplete
+                ? 'Challenge window has ended, but your completed reward can still be claimed now.'
+                : 'Challenge failed this round. You did not complete 9 NPC talks in time.',
+            status: this.getMissionStatusLine(),
+            showClaim: didComplete,
+            onClaim: () => this.handleClaimRewardFromModal(),
+            onClose: () => {
+                this.modalMode = null;
+            },
+        });
+    }
+
+    showCompletionModal() {
+        this.modalMode = 'complete';
+        this.missionModal.show({
+            title: 'MISSION COMPLETE',
+            body: 'You filled the 3x3 mission grid. Claim your reward now to receive QUAI from the contract.',
+            status: this.getMissionStatusLine(),
+            showClaim: this.missionState.claimableUnits > 0,
+            onClaim: () => this.handleClaimRewardFromModal(),
+            onClose: () => {
+                this.modalMode = null;
+            },
+        });
+    }
+
+    async handleClaimRewardFromModal() {
+        if (!this.playerWalletAddress) {
+            this.showVoiceStatus('Connect wallet before claiming rewards', 'error');
+            return;
+        }
+        try {
+            this.showVoiceStatus('Submitting reward claim...', 'neutral');
+            await ContractService.redeemRewardsTx();
+            await this.syncProgressFromChain();
+            this.showVoiceStatus('Reward claimed successfully', 'ok');
+            this.missionModal.show({
+                title: 'REWARD CLAIMED',
+                body: 'Your reward transaction was confirmed on-chain.',
+                status: this.getMissionStatusLine(),
+                showClaim: false,
+                onClose: () => {
+                    this.modalMode = null;
+                },
+            });
+        } catch (error) {
+            console.error('Reward claim failed', error);
+            this.showVoiceStatus(`Claim failed: ${error.message}`, 'error');
+            this.missionModal.show({
+                title: 'CLAIM FAILED',
+                body: 'The claim transaction did not complete. You can retry the claim.',
+                status: this.getMissionStatusLine(),
+                showClaim: this.missionState.claimableUnits > 0,
+                onClaim: () => this.handleClaimRewardFromModal(),
+                onClose: () => {
+                    this.modalMode = null;
+                },
+            });
+        }
     }
 
     handleSceneShutdown() {
@@ -925,6 +1130,10 @@ export class Game extends Scene
         this.labelsVisible = true;
 
         this.input.keyboard.on('keydown-ESC', () => {
+            if (this.missionModal?.isOpen) {
+                this.missionModal.hide();
+                return;
+            }
             if (!this.dialogueBox.isVisible()) {
                 this.scene.pause();
                 this.scene.launch('PauseMenu');
@@ -962,15 +1171,13 @@ export class Game extends Scene
 
         const isInDialogue = this.dialogueBox.isVisible();
 
-        if (!isInDialogue && !this.sessionExpired) {
+        if (!isInDialogue) {
             this.updatePlayerMovement();
-        } else if (this.sessionExpired && this.player?.body) {
+        } else if (this.player?.body) {
             this.player.body.setVelocity(0);
         }
 
-        if (!this.sessionExpired) {
-            this.checkCharacterInteraction();
-        }
+        this.checkCharacterInteraction();
 
         this.updateVoiceEngagementRewards();
 

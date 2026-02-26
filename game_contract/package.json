@@ -1,0 +1,36 @@
+{
+    "name": "Mystverse",
+    "version": "1.0.0",
+    "main": "index.js",
+    "scripts": {
+        "compile": "hardhat compile",
+        "test": "hardhat test",
+        "deploy:cyprus1": "hardhat run scripts/deploy.js --network cyprus1",
+        "set-operator:cyprus1": "hardhat run scripts/setOperator.js --network cyprus1",
+        "fund:cyprus1": "hardhat run scripts/fundContract.js --network cyprus1",
+        "start:cyprus1": "hardhat run scripts/startChallenge.js --network cyprus1",
+        "record:cyprus1": "hardhat run scripts/recordNpcTalk.js --network cyprus1",
+        "progress:cyprus1": "hardhat run scripts/getProgress.js --network cyprus1",
+        "redeem:cyprus1": "hardhat run scripts/redeemRewards.js --network cyprus1"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "description": "",
+    "dependencies": {
+        "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+        "@openzeppelin/contracts": "^5.3.0",
+        "@openzeppelin/contracts-upgradeable": "^5.3.0",
+        "@pinata/sdk": "^2.1.0",
+        "@quai/hardhat-deploy-metadata": "^1.0.8",
+        "dotenv": "^16.6.1",
+        "ethers": "^6.15.0",
+        "next": "15.3.1",
+        "quais": "^1.0.0-alpha.52",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0"
+    },
+    "devDependencies": {
+        "hardhat": "^2.24.0"
+    }
+}

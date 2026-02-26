@@ -61,7 +61,10 @@ module.exports = {
             "typeof PLUGIN_3D": JSON.stringify(false),
             "typeof PLUGIN_CAMERA3D": JSON.stringify(false),
             "typeof PLUGIN_FBINSTANT": JSON.stringify(false),
-            "typeof FEATURE_SOUND": JSON.stringify(true)
+            "typeof FEATURE_SOUND": JSON.stringify(true),
+            "process.env.GAME_CONTRACT_ADDRESS": JSON.stringify(process.env.GAME_CONTRACT_ADDRESS || ""),
+            "process.env.GAME_CHAIN_ID": JSON.stringify(process.env.GAME_CHAIN_ID || process.env.CHAIN_ID || ""),
+            "process.env.CHAIN_ID": JSON.stringify(process.env.CHAIN_ID || "")
         }),
         new HtmlWebpackPlugin({
             template: "./index.html"
