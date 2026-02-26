@@ -3,6 +3,7 @@ import Character from '../classes/Character';
 import DialogueBox from '../classes/DialogueBox';
 import DialogueManager from '../classes/DialogueManager';
 import VoiceChatService from '../services/VoiceChatService';
+import { gameFont } from '../constants/fonts';
 
 export class Game extends Scene
 {
@@ -33,6 +34,21 @@ export class Game extends Scene
         this.voiceBootstrapped = false;
         this.availableCharacterTokens = new Set();
         this.fallbackCharacterToken = null;
+        this.sessionDurationMs = 5 * 60 * 1000;
+        this.sessionEndsAt = 0;
+        this.sessionExpired = false;
+        this.sessionTimerText = null;
+        this.redeemText = null;
+        this.rewardBalance = 0;
+        this.redeemThreshold = 3.0;
+        this.rewardPerNpcVisit = 0.3;
+        this.milestoneNpcCount = 3;
+        this.milestoneBonus = 0.1;
+        this.rewardedNpcIds = new Set();
+        this.rewardMilestonesClaimed = 0;
+        this.requiredEngagementMs = 20 * 1000;
+        this.activeVoiceNpcId = null;
+        this.activeVoiceStartAt = 0;
     }
 
     init (data)
@@ -81,6 +97,9 @@ export class Game extends Scene
         this.createNpcDistancePanel();
         this.createVoiceStatusPanel();
         this.createTopBarUi();
+        this.sessionEndsAt = this.time.now + this.sessionDurationMs;
+        this.updateSessionTimerUi();
+        this.updateRewardUi();
         this.initializeVoiceSession();
 
         this.events.on('shutdown', this.handleSceneShutdown, this);
@@ -326,7 +345,7 @@ export class Game extends Scene
         const style = styleMap[tone] || styleMap.neutral;
 
         this.voiceStatusText.setStyle({
-            font: '12px monospace',
+            font: gameFont(12),
             fill: style.fill,
             backgroundColor: style.backgroundColor,
             padding: { x: 8, y: 4 }
@@ -354,10 +373,14 @@ export class Game extends Scene
                 playerName: this.playerName
             });
             this.voiceConnectedCharacterId = character.id;
+            this.activeVoiceNpcId = character.id;
+            this.activeVoiceStartAt = this.time.now;
             this.showVoiceStatus(`Connected: ${character.name}`, 'ok');
         } catch (error) {
             console.error('Voice connection failed', error);
             this.voiceConnectedCharacterId = null;
+            this.activeVoiceNpcId = null;
+            this.activeVoiceStartAt = 0;
             this.showVoiceStatus(`Voice connect failed: ${error.message}`, 'error');
         }
     }
@@ -365,10 +388,14 @@ export class Game extends Scene
     async pauseVoice(reason = '') {
         if (!VoiceChatService.isConnected) {
             this.voiceConnectedCharacterId = null;
+            this.activeVoiceNpcId = null;
+            this.activeVoiceStartAt = 0;
             return;
         }
 
         this.voiceConnectedCharacterId = null;
+        this.activeVoiceNpcId = null;
+        this.activeVoiceStartAt = 0;
         try {
             await VoiceChatService.pauseConversation();
         } catch (error) {
@@ -383,10 +410,14 @@ export class Game extends Scene
     async disconnectVoice(reason = '') {
         if (!VoiceChatService.isConnected) {
             this.voiceConnectedCharacterId = null;
+            this.activeVoiceNpcId = null;
+            this.activeVoiceStartAt = 0;
             return;
         }
 
         this.voiceConnectedCharacterId = null;
+        this.activeVoiceNpcId = null;
+        this.activeVoiceStartAt = 0;
 
         try {
             await VoiceChatService.disconnect();
@@ -434,19 +465,19 @@ export class Game extends Scene
         }
 
         const nameText = this.add.text(boxX + 16, boxY + 10, '', {
-            font: '14px monospace',
+            font: gameFont(14),
             color: '#94ccff'
         });
 
         const bodyText = this.add.text(boxX + 16, boxY + 34, '', {
-            font: '13px monospace',
+            font: gameFont(13),
             color: '#ffffff',
             wordWrap: { width: boxWidth - 32 },
             lineSpacing: 5
         });
 
         const hintText = this.add.text(boxX + boxWidth - 12, boxY + boxHeight - 8, 'Press A to talk', {
-            font: '12px monospace',
+            font: gameFont(12),
             color: '#ffd28f'
         }).setOrigin(1, 1);
 
@@ -563,7 +594,7 @@ export class Game extends Scene
 
     createPlayerNameLabel() {
         this.playerNameLabel = this.add.text(this.player.x, this.player.y - 40, this.playerName, {
-            font: '14px Arial',
+            font: gameFont(14),
             fill: '#ffffff',
             backgroundColor: '#000000',
             padding: { x: 4, y: 2 },
@@ -587,7 +618,7 @@ export class Game extends Scene
     createNpcDistancePanel() {
         const panelX = this.cameras.main.width - 295;
         this.npcDistanceText = this.add.text(panelX, 20, '', {
-            font: '12px monospace',
+            font: gameFont(12),
             fill: '#ffffff',
             backgroundColor: '#000000',
             padding: { x: 8, y: 6 },
@@ -598,7 +629,7 @@ export class Game extends Scene
 
     createVoiceStatusPanel() {
         this.voiceStatusText = this.add.text(20, this.cameras.main.height - 36, '', {
-            font: '12px monospace',
+            font: gameFont(12),
             fill: '#dff6ff',
             backgroundColor: '#132230',
             padding: { x: 8, y: 4 }
@@ -610,7 +641,7 @@ export class Game extends Scene
         const { width } = this.scale;
 
         this.menuButton = this.add.text(14, 12, '|||', {
-            font: '20px monospace',
+            font: gameFont(20),
             color: '#d7ecff',
             backgroundColor: '#0c1a2a',
             padding: { x: 8, y: 2 }
@@ -620,7 +651,7 @@ export class Game extends Scene
             .setInteractive({ useHandCursor: true });
 
         this.logoutButton = this.add.text(width - 14, 12, 'LOGOUT', {
-            font: '12px monospace',
+            font: gameFont(12),
             color: '#ffd3d3',
             backgroundColor: '#321414',
             padding: { x: 8, y: 5 }
@@ -630,22 +661,43 @@ export class Game extends Scene
             .setDepth(60)
             .setInteractive({ useHandCursor: true });
 
+        this.redeemText = this.add.text(width / 2, 10, 'REDEEM $ 0.0', {
+            font: gameFont(13),
+            color: '#f6e6a8',
+            backgroundColor: '#3a2f12',
+            padding: { x: 12, y: 4 }
+        })
+            .setOrigin(0.5, 0)
+            .setScrollFactor(0)
+            .setDepth(60)
+            .setInteractive({ useHandCursor: true });
+
+        this.sessionTimerText = this.add.text(width / 2, 39, 'TIME 05:00', {
+            font: gameFont(12),
+            color: '#d7ecff',
+            backgroundColor: '#0c1a2a',
+            padding: { x: 10, y: 4 }
+        })
+            .setOrigin(0.5, 0)
+            .setScrollFactor(0)
+            .setDepth(60);
+
         this.menuPanel = this.add.container(0, 0).setDepth(61).setScrollFactor(0).setVisible(false);
         const panelBg = this.add.rectangle(120, 84, 208, 122, 0x0c1a2a, 0.96).setStrokeStyle(2, 0x6bb0ff, 1);
         const resumeBtn = this.add.text(36, 44, 'Resume', {
-            font: '13px monospace',
+            font: gameFont(13),
             color: '#ffffff',
             backgroundColor: '#1d3651',
             padding: { x: 8, y: 5 }
         }).setInteractive({ useHandCursor: true });
         const disconnectBtn = this.add.text(36, 78, 'Disconnect Voice', {
-            font: '13px monospace',
+            font: gameFont(13),
             color: '#ffffff',
             backgroundColor: '#1d3651',
             padding: { x: 8, y: 5 }
         }).setInteractive({ useHandCursor: true });
         const menuMainBtn = this.add.text(36, 112, 'Main Menu', {
-            font: '13px monospace',
+            font: gameFont(13),
             color: '#ffffff',
             backgroundColor: '#1d3651',
             padding: { x: 8, y: 5 }
@@ -668,6 +720,120 @@ export class Game extends Scene
         });
         this.logoutButton.on('pointerdown', () => {
             this.disconnectVoice();
+            this.scene.start('MainMenu');
+        });
+
+        this.redeemText.on('pointerdown', () => {
+            this.handleRedeemClick();
+        });
+    }
+
+    formatTimer(ms) {
+        const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    updateSessionTimerUi() {
+        if (!this.sessionTimerText) {
+            return;
+        }
+        const remainingMs = Math.max(0, this.sessionEndsAt - this.time.now);
+        this.sessionTimerText.setText(`TIME ${this.formatTimer(remainingMs)}`);
+        if (remainingMs <= 60000) {
+            this.sessionTimerText.setColor('#ffd3d3');
+            this.sessionTimerText.setBackgroundColor('#321414');
+        }
+    }
+
+    updateRewardUi() {
+        if (!this.redeemText) {
+            return;
+        }
+        const canRedeem = this.rewardBalance >= this.redeemThreshold;
+        this.redeemText.setText(`REDEEM $ ${this.rewardBalance.toFixed(1)} / ${this.redeemThreshold.toFixed(1)}`);
+        this.redeemText.setColor(canRedeem ? '#fff1b0' : '#f6e6a8');
+        this.redeemText.setBackgroundColor(canRedeem ? '#4a3a11' : '#3a2f12');
+    }
+
+    handleRedeemClick() {
+        if (this.rewardBalance < this.redeemThreshold) {
+            const needed = (this.redeemThreshold - this.rewardBalance).toFixed(1);
+            this.showVoiceStatus(`Need ${needed} more token(s) to redeem`, 'neutral');
+            return;
+        }
+
+        this.rewardBalance = Number((this.rewardBalance - this.redeemThreshold).toFixed(1));
+        this.updateRewardUi();
+        console.log(
+            `[RewardRedeem] player=${this.playerName} redeemed=${this.redeemThreshold.toFixed(1)} remaining=${this.rewardBalance.toFixed(1)}`
+        );
+        this.showVoiceStatus(`Redeemed ${this.redeemThreshold.toFixed(1)} token(s)!`, 'ok');
+    }
+
+    grantReward(amount, reason) {
+        this.rewardBalance = Number((this.rewardBalance + amount).toFixed(1));
+        this.updateRewardUi();
+        console.log(
+            `[RewardWin] player=${this.playerName} gained=${amount.toFixed(1)} total=${this.rewardBalance.toFixed(1)} reason="${reason}" unique_npcs=${this.rewardedNpcIds.size}`
+        );
+    }
+
+    getCharacterById(characterId) {
+        return this.characters.find((character) => character.id === characterId) || null;
+    }
+
+    updateVoiceEngagementRewards() {
+        if (this.sessionExpired) {
+            return;
+        }
+
+        if (!this.activeVoiceNpcId || this.rewardedNpcIds.has(this.activeVoiceNpcId)) {
+            return;
+        }
+
+        const connectedCharacter = this.getCharacterById(this.activeVoiceNpcId);
+        if (!connectedCharacter) {
+            return;
+        }
+
+        const elapsed = this.time.now - this.activeVoiceStartAt;
+        if (elapsed < this.requiredEngagementMs) {
+            return;
+        }
+
+        this.rewardedNpcIds.add(this.activeVoiceNpcId);
+        this.grantReward(this.rewardPerNpcVisit, `20s engagement with ${connectedCharacter.name}`);
+        this.showVoiceStatus(`Reward unlocked: +${this.rewardPerNpcVisit.toFixed(1)} token`, 'ok');
+
+        const completedMilestones = Math.floor(this.rewardedNpcIds.size / this.milestoneNpcCount);
+        if (completedMilestones > this.rewardMilestonesClaimed) {
+            const bonusSteps = completedMilestones - this.rewardMilestonesClaimed;
+            const milestoneBonusTotal = Number((bonusSteps * this.milestoneBonus).toFixed(1));
+            this.rewardMilestonesClaimed = completedMilestones;
+            this.grantReward(milestoneBonusTotal, `${this.milestoneNpcCount} NPC milestone bonus`);
+            this.showVoiceStatus(`Milestone bonus: +${milestoneBonusTotal.toFixed(1)} token`, 'ok');
+        }
+    }
+
+    updateSessionState() {
+        if (this.sessionExpired) {
+            return;
+        }
+
+        this.updateSessionTimerUi();
+
+        if (this.time.now < this.sessionEndsAt) {
+            return;
+        }
+
+        this.sessionExpired = true;
+        this.updateSessionTimerUi();
+        this.hideProximityDialogue();
+        this.disconnectVoice('Session ended');
+        this.showVoiceStatus('5 minute session ended. Returning to menu...', 'neutral');
+        this.time.delayedCall(1500, () => {
             this.scene.start('MainMenu');
         });
     }
@@ -773,7 +939,7 @@ export class Game extends Scene
         this.dialogueBox = new DialogueBox(this);
         this.dialogueText = this.add
             .text(60, this.game.config.height - maxDialogueHeight - screenPadding + screenPadding, '', {
-                font: '18px monospace',
+                font: gameFont(18),
                 fill: '#ffffff',
                 padding: { x: 20, y: 10 },
                 wordWrap: { width: 680 },
@@ -792,13 +958,21 @@ export class Game extends Scene
     }
 
     update(time, delta) {
+        this.updateSessionState();
+
         const isInDialogue = this.dialogueBox.isVisible();
 
-        if (!isInDialogue) {
+        if (!isInDialogue && !this.sessionExpired) {
             this.updatePlayerMovement();
+        } else if (this.sessionExpired && this.player?.body) {
+            this.player.body.setVelocity(0);
         }
 
-        this.checkCharacterInteraction();
+        if (!this.sessionExpired) {
+            this.checkCharacterInteraction();
+        }
+
+        this.updateVoiceEngagementRewards();
 
         this.characters.forEach(character => {
             character.update(this.player, isInDialogue);

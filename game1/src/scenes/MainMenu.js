@@ -1,6 +1,7 @@
 import { Scene } from 'phaser'
 import ApiService from '../services/ApiService'
 import { walletAuthContext } from '../contexts/WalletAuthContext'
+import { GAME_FONT_FAMILY } from '../constants/fonts'
 
 export class MainMenu extends Scene {
   constructor() {
@@ -9,10 +10,14 @@ export class MainMenu extends Scene {
     this.walletButtonElements = null
     this.walletStatusText = null
     this.walletAddressText = null
+    this.nameEntryModal = null
+    this.nameEntryInput = ''
+    this.nameEntryKeyHandler = null
   }
 
   create() {
     this.add.image(0, 0, 'background').setOrigin(0, 0)
+    this.addGameTitle()
     this.add.image(510, 260, 'logo').setScale(0.55)
 
     const centerX = this.cameras.main.width / 2
@@ -20,31 +25,57 @@ export class MainMenu extends Scene {
     const buttonSpacing = 70
 
     this.createButton(centerX, startY, "Let's Play!", () => {
-      this.startGameWithName()
+      this.showNameEntryDialog()
     })
 
     this.createButton(centerX, startY + buttonSpacing, 'Instructions', () => {
       this.showInstructions()
     })
 
-    this.createButton(centerX, startY + buttonSpacing * 2, 'Support Philoagents', () => {
-      window.open('https://github.com/neural-maze/philoagents-course', '_blank')
-    })
+    // this.createButton(centerX, startY + buttonSpacing * 2, 'Support Philoagents', () => {
+    //   window.open('https://github.com/neural-maze/philoagents-course', '_blank')
+    // })
 
     this.setupWalletUI()
-    this.events.once('shutdown', () => this.cleanupWalletUI())
+    this.events.once('shutdown', () => {
+      this.cleanupWalletUI()
+      this.destroyNameEntryDialog()
+    })
   }
 
-  async startGameWithName() {
-    const firstAttempt = window.prompt('Enter subject name:')
-    const normalizedFirstAttempt = firstAttempt?.trim()
+  addGameTitle() {
+    const centerX = this.cameras.main.width / 2
+    const titleY = this.cameras.main.height / 2
 
-    let playerName = normalizedFirstAttempt
-    if (!playerName) {
-      const secondAttempt = window.prompt('Name cannot be empty. Enter subject name:')
-      const normalizedSecondAttempt = secondAttempt?.trim()
-      playerName = normalizedSecondAttempt || 'Subject-0'
-    }
+    const titleText = this.add
+      .text(centerX, titleY, 'Mystic\nWorld', {
+        fontSize: '54px',
+        fontFamily: GAME_FONT_FAMILY,
+        color: '#000000',
+        fontStyle: 'bold',
+        align: 'center',
+        lineSpacing: 8,
+      })
+      .setOrigin(0.5)
+
+    const paddingX = 54
+    const paddingY = 30
+    const radius = 44
+    const panelWidth = titleText.width + paddingX * 2
+    const panelHeight = titleText.height + paddingY * 2
+
+    const titleBg = this.add.graphics()
+    titleBg.fillStyle(0xffffff, 1)
+    titleBg.fillRoundedRect(centerX - panelWidth / 2, titleY - panelHeight / 2, panelWidth, panelHeight, radius)
+    titleBg.lineStyle(3, 0x000000, 1)
+    titleBg.strokeRoundedRect(centerX - panelWidth / 2, titleY - panelHeight / 2, panelWidth, panelHeight, radius)
+
+    titleBg.setDepth(4)
+    titleText.setDepth(5)
+  }
+
+  async startGameWithName(playerNameInput) {
+    const playerName = playerNameInput?.trim() || 'Subject-0'
 
     const startPayload = { playerName }
 
@@ -99,21 +130,253 @@ export class MainMenu extends Scene {
     this.scene.start('Game', startPayload)
   }
 
+  showNameEntryDialog() {
+    if (this.nameEntryModal) {
+      return
+    }
+
+    const width = this.cameras.main.width
+    const height = this.cameras.main.height
+    const centerX = width / 2
+    const centerY = height / 2
+    const panelWidth = 560
+    const panelHeight = 280
+    const panelX = centerX - panelWidth / 2
+    const panelY = centerY - panelHeight / 2
+    const depth = 90
+
+    const overlay = this.add.graphics()
+    overlay.fillStyle(0x000000, 0.74)
+    overlay.fillRect(0, 0, width, height)
+    overlay.setInteractive(new Phaser.Geom.Rectangle(0, 0, width, height), Phaser.Geom.Rectangle.Contains).setDepth(depth)
+
+    const panel = this.add.graphics()
+    panel.fillStyle(0x090909, 0.96)
+    panel.fillRoundedRect(panelX, panelY, panelWidth, panelHeight, 18)
+    panel.lineStyle(3, 0x6bb0ff, 0.95)
+    panel.strokeRoundedRect(panelX, panelY, panelWidth, panelHeight, 18)
+    panel.lineStyle(1, 0x1f2f4f, 0.9)
+    for (let lineY = panelY + 10; lineY < panelY + panelHeight - 10; lineY += 4) {
+      panel.lineBetween(panelX + 8, lineY, panelX + panelWidth - 8, lineY)
+    }
+    panel.setDepth(depth + 1)
+
+    const title = this.add
+      .text(centerX, panelY + 44, 'ENTER SUBJECT NAME', {
+        fontSize: '28px',
+        fontFamily: GAME_FONT_FAMILY,
+        color: '#cce8ff',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+      .setDepth(depth + 2)
+
+    const subtitle = this.add
+      .text(centerX, panelY + 78, 'Type and press Enter (max 24 chars)', {
+        fontSize: '16px',
+        fontFamily: GAME_FONT_FAMILY,
+        color: '#8db9de',
+      })
+      .setOrigin(0.5)
+      .setDepth(depth + 2)
+
+    const inputBg = this.add
+      .rectangle(centerX, panelY + 132, panelWidth - 80, 56, 0x0d1e31, 0.95)
+      .setStrokeStyle(2, 0x6bb0ff, 1)
+      .setDepth(depth + 2)
+
+    this.nameEntryInput = ''
+
+    const inputText = this.add
+      .text(panelX + 54, panelY + 113, 'Type your name...', {
+        fontSize: '26px',
+        fontFamily: GAME_FONT_FAMILY,
+        color: '#7fa2c2',
+        fontStyle: 'bold',
+      })
+      .setDepth(depth + 3)
+
+    const errorText = this.add
+      .text(centerX, panelY + 174, '', {
+        fontSize: '16px',
+        fontFamily: GAME_FONT_FAMILY,
+        color: '#ffb2b2',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+      .setDepth(depth + 2)
+
+    const startButton = this.createButton(
+      centerX - 92,
+      panelY + 226,
+      'Start',
+      () => {
+        this.submitNameEntry()
+      },
+      {
+        buttonWidth: 160,
+        buttonHeight: 48,
+        cornerRadius: 14,
+        maxFontSize: 22,
+        palette: {
+          top: 0x3dba92,
+          bottom: 0x23735a,
+          border: 0xcff9eb,
+          shadow: 0x071b16,
+          glow: 0x82ffd8,
+          text: '#f6fffb',
+        },
+      },
+    )
+    startButton.shadow.setDepth(depth + 2)
+    startButton.button.setDepth(depth + 3)
+    startButton.text.setDepth(depth + 4)
+
+    const cancelButton = this.createButton(
+      centerX + 92,
+      panelY + 226,
+      'Cancel',
+      () => {
+        this.destroyNameEntryDialog()
+      },
+      {
+        buttonWidth: 160,
+        buttonHeight: 48,
+        cornerRadius: 14,
+        maxFontSize: 22,
+        palette: {
+          top: 0x4b8fd2,
+          bottom: 0x2a5d99,
+          border: 0xd8eeff,
+          shadow: 0x081624,
+          glow: 0x9dd3ff,
+          text: '#f7fbff',
+        },
+      },
+    )
+    cancelButton.shadow.setDepth(depth + 2)
+    cancelButton.button.setDepth(depth + 3)
+    cancelButton.text.setDepth(depth + 4)
+
+    this.nameEntryModal = {
+      overlay,
+      panel,
+      title,
+      subtitle,
+      inputBg,
+      inputText,
+      errorText,
+      startButton,
+      cancelButton,
+    }
+
+    this.nameEntryKeyHandler = (event) => {
+      if (!this.nameEntryModal) {
+        return
+      }
+
+      if (event.key === 'Backspace') {
+        event.preventDefault()
+        this.nameEntryInput = this.nameEntryInput.slice(0, -1)
+      } else if (event.key === 'Enter') {
+        event.preventDefault()
+        this.submitNameEntry()
+        return
+      } else if (event.key === 'Escape') {
+        event.preventDefault()
+        this.destroyNameEntryDialog()
+        return
+      } else if (event.key?.length === 1 && /^[a-zA-Z0-9 _-]$/.test(event.key) && this.nameEntryInput.length < 24) {
+        this.nameEntryInput += event.key
+      } else {
+        return
+      }
+
+      this.updateNameEntryInputText()
+    }
+
+    this.input.keyboard.on('keydown', this.nameEntryKeyHandler)
+    this.updateNameEntryInputText()
+  }
+
+  updateNameEntryInputText() {
+    if (!this.nameEntryModal) {
+      return
+    }
+
+    if (this.nameEntryInput.length > 0) {
+      this.nameEntryModal.inputText.setText(`${this.nameEntryInput}_`)
+      this.nameEntryModal.inputText.setColor('#f2fbff')
+      return
+    }
+
+    this.nameEntryModal.inputText.setText('Type your name...')
+    this.nameEntryModal.inputText.setColor('#7fa2c2')
+  }
+
+  submitNameEntry() {
+    if (!this.nameEntryModal) {
+      return
+    }
+
+    const trimmedName = this.nameEntryInput.trim()
+    if (!trimmedName) {
+      this.nameEntryModal.errorText.setText('Name cannot be empty.')
+      return
+    }
+
+    this.destroyNameEntryDialog()
+    this.startGameWithName(trimmedName)
+  }
+
+  destroyNameEntryDialog() {
+    if (!this.nameEntryModal) {
+      return
+    }
+
+    if (this.nameEntryKeyHandler) {
+      this.input.keyboard.off('keydown', this.nameEntryKeyHandler)
+      this.nameEntryKeyHandler = null
+    }
+
+    const { overlay, panel, title, subtitle, inputBg, inputText, errorText, startButton, cancelButton } = this.nameEntryModal
+    overlay.destroy()
+    panel.destroy()
+    title.destroy()
+    subtitle.destroy()
+    inputBg.destroy()
+    inputText.destroy()
+    errorText.destroy()
+    startButton.button.destroy()
+    startButton.shadow.destroy()
+    startButton.text.destroy()
+    cancelButton.button.destroy()
+    cancelButton.shadow.destroy()
+    cancelButton.text.destroy()
+
+    this.nameEntryInput = ''
+    this.nameEntryModal = null
+  }
+
   createButton(x, y, text, callback, options = {}) {
     const buttonWidth = options.buttonWidth || 350
     const buttonHeight = options.buttonHeight || 60
     const cornerRadius = options.cornerRadius || 20
     const maxFontSize = options.maxFontSize || 28
     const padding = options.padding || 10
+    const palette = options.palette || {
+      top: 0x2e7bb7,
+      bottom: 0x1f4d84,
+      border: 0xa6ddff,
+      shadow: 0x071625,
+      glow: 0x63c8ff,
+      text: '#f7fbff',
+    }
 
     const shadow = this.add.graphics()
-    shadow.fillStyle(0x666666, 1)
-    shadow.fillRoundedRect(x - buttonWidth / 2 + 4, y - buttonHeight / 2 + 4, buttonWidth, buttonHeight, cornerRadius)
-
     const button = this.add.graphics()
-    button.fillStyle(0xffffff, 1)
-    button.fillRoundedRect(x - buttonWidth / 2, y - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
     button.setInteractive(new Phaser.Geom.Rectangle(x - buttonWidth / 2, y - buttonHeight / 2, buttonWidth, buttonHeight), Phaser.Geom.Rectangle.Contains)
+    this.updateButtonStyle(button, shadow, x, y, buttonWidth, buttonHeight, cornerRadius, 'default', palette)
 
     let fontSize = maxFontSize
     let buttonText
@@ -123,8 +386,8 @@ export class MainMenu extends Scene {
       buttonText = this.add
         .text(x, y, text, {
           fontSize: `${fontSize}px`,
-          fontFamily: 'Arial',
-          color: '#000000',
+          fontFamily: GAME_FONT_FAMILY,
+          color: palette.text,
           fontStyle: 'bold',
         })
         .setOrigin(0.5)
@@ -132,36 +395,60 @@ export class MainMenu extends Scene {
       fontSize -= 1
     } while (buttonText.width > buttonWidth - padding && fontSize > 10)
 
+    const baseTextY = y
+
     button.on('pointerover', () => {
-      this.updateButtonStyle(button, shadow, x, y, buttonWidth, buttonHeight, cornerRadius, true)
-      buttonText.y -= 2
+      this.updateButtonStyle(button, shadow, x, y, buttonWidth, buttonHeight, cornerRadius, 'hover', palette)
+      buttonText.y = baseTextY - 2
     })
 
     button.on('pointerout', () => {
-      this.updateButtonStyle(button, shadow, x, y, buttonWidth, buttonHeight, cornerRadius, false)
-      buttonText.y += 2
+      this.updateButtonStyle(button, shadow, x, y, buttonWidth, buttonHeight, cornerRadius, 'default', palette)
+      buttonText.y = baseTextY
     })
 
-    button.on('pointerdown', callback)
+    button.on('pointerdown', () => {
+      this.updateButtonStyle(button, shadow, x, y, buttonWidth, buttonHeight, cornerRadius, 'pressed', palette)
+      buttonText.y = baseTextY + 1
+    })
+
+    button.on('pointerup', () => {
+      this.updateButtonStyle(button, shadow, x, y, buttonWidth, buttonHeight, cornerRadius, 'hover', palette)
+      buttonText.y = baseTextY - 2
+      callback()
+    })
+
+    button.on('pointerupoutside', () => {
+      this.updateButtonStyle(button, shadow, x, y, buttonWidth, buttonHeight, cornerRadius, 'default', palette)
+      buttonText.y = baseTextY
+    })
 
     return { button, shadow, text: buttonText }
   }
 
-  updateButtonStyle(button, shadow, x, y, width, height, radius, isHover) {
+  updateButtonStyle(button, shadow, x, y, width, height, radius, state, palette) {
     button.clear()
     shadow.clear()
 
-    if (isHover) {
-      button.fillStyle(0x87ceeb, 1)
-      shadow.fillStyle(0x888888, 1)
-      shadow.fillRoundedRect(x - width / 2 + 2, y - height / 2 + 2, width, height, radius)
-    } else {
-      button.fillStyle(0xffffff, 1)
-      shadow.fillStyle(0x666666, 1)
-      shadow.fillRoundedRect(x - width / 2 + 4, y - height / 2 + 4, width, height, radius)
+    const styleByState = {
+      default: { top: palette.top, bottom: palette.bottom, border: palette.border, offset: 5, glow: 0 },
+      hover: { top: 0x4197d6, bottom: 0x2a629f, border: 0xd4efff, offset: 3, glow: 0.35 },
+      pressed: { top: 0x1f4d84, bottom: 0x173b63, border: 0x8ec8ef, offset: 1, glow: 0.15 },
+    }
+    const style = styleByState[state] || styleByState.default
+
+    shadow.fillStyle(palette.shadow, 0.55)
+    shadow.fillRoundedRect(x - width / 2, y - height / 2 + style.offset, width, height, radius)
+
+    if (style.glow > 0) {
+      shadow.lineStyle(3, palette.glow, style.glow)
+      shadow.strokeRoundedRect(x - width / 2 - 1, y - height / 2 - 1, width + 2, height + 2, radius + 1)
     }
 
+    button.fillGradientStyle(style.top, style.top, style.bottom, style.bottom, 1)
     button.fillRoundedRect(x - width / 2, y - height / 2, width, height, radius)
+    button.lineStyle(2, style.border, 1)
+    button.strokeRoundedRect(x - width / 2, y - height / 2, width, height, radius)
   }
 
   showInstructions() {
@@ -206,7 +493,7 @@ export class MainMenu extends Scene {
     const title = this.add
       .text(centerX, centerY - 110, 'INSTRUCTIONS', {
         fontSize: '28px',
-        fontFamily: 'Arial',
+        fontFamily: GAME_FONT_FAMILY,
         color: '#000000',
         fontStyle: 'bold',
       })
@@ -221,7 +508,7 @@ export class MainMenu extends Scene {
         this.add
           .text(centerX, yPos, instruction, {
             fontSize: '22px',
-            fontFamily: 'Arial',
+            fontFamily: GAME_FONT_FAMILY,
             color: '#000000',
           })
           .setOrigin(0.5),
@@ -233,48 +520,20 @@ export class MainMenu extends Scene {
   }
 
   addCloseButton(x, y, callback) {
-    const adjustedY = y + 10
-
-    const buttonWidth = 120
-    const buttonHeight = 40
-    const cornerRadius = 10
-
-    const closeButton = this.add.graphics()
-    closeButton.fillStyle(0x87ceeb, 1)
-    closeButton.fillRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
-    closeButton.lineStyle(2, 0x000000, 1)
-    closeButton.strokeRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
-
-    const closeText = this.add
-      .text(x, adjustedY, 'Close', {
-        fontSize: '20px',
-        fontFamily: 'Arial',
-        color: '#000000',
-        fontStyle: 'bold',
-      })
-      .setOrigin(0.5)
-
-    closeButton.setInteractive(new Phaser.Geom.Rectangle(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight), Phaser.Geom.Rectangle.Contains)
-
-    closeButton.on('pointerover', () => {
-      closeButton.clear()
-      closeButton.fillStyle(0x5cacee, 1)
-      closeButton.fillRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
-      closeButton.lineStyle(2, 0x000000, 1)
-      closeButton.strokeRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
+    return this.createButton(x, y + 10, 'Close', callback, {
+      buttonWidth: 130,
+      buttonHeight: 42,
+      cornerRadius: 12,
+      maxFontSize: 20,
+      palette: {
+        top: 0x4eb5e7,
+        bottom: 0x2a85b5,
+        border: 0xdaf4ff,
+        shadow: 0x04131d,
+        glow: 0x8fdfff,
+        text: '#f7fbff',
+      },
     })
-
-    closeButton.on('pointerout', () => {
-      closeButton.clear()
-      closeButton.fillStyle(0x87ceeb, 1)
-      closeButton.fillRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
-      closeButton.lineStyle(2, 0x000000, 1)
-      closeButton.strokeRoundedRect(x - buttonWidth / 2, adjustedY - buttonHeight / 2, buttonWidth, buttonHeight, cornerRadius)
-    })
-
-    closeButton.on('pointerdown', callback)
-
-    return { button: closeButton, text: closeText }
   }
 
   destroyInstructionElements(elements) {
@@ -295,7 +554,7 @@ export class MainMenu extends Scene {
     this.walletStatusText = this.add
       .text(panelCenterX, panelTopY - 24, 'Pelagus: checking...', {
         fontSize: '16px',
-        fontFamily: 'Arial',
+        fontFamily: GAME_FONT_FAMILY,
         color: '#ffffff',
         fontStyle: 'bold',
         backgroundColor: '#000000',
@@ -321,7 +580,7 @@ export class MainMenu extends Scene {
     this.walletAddressText = this.add
       .text(panelCenterX, panelTopY + 64, '', {
         fontSize: '14px',
-        fontFamily: 'Arial',
+        fontFamily: GAME_FONT_FAMILY,
         color: '#ffffff',
         fontStyle: 'bold',
         backgroundColor: '#000000',

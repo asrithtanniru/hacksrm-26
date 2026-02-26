@@ -1,3 +1,5 @@
+import { gameFont } from '../constants/fonts';
+
 class DialogueBox {
     constructor(scene, config = {}) {
         this.scene = scene;
@@ -14,7 +16,7 @@ class DialogueBox {
             borderColor = 0xffffff,
             borderWidth = 2,
             textConfig = {
-                font: '24px Arial',
+                font: gameFont(24),
                 fill: '#ffffff',
                 wordWrap: { width: 784 }
             },
