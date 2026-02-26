@@ -61,6 +61,17 @@ class NpcTalkRequest(BaseModel):
     engagement_ms: int = 0
 
 
+class ClaimRequest(BaseModel):
+    player_address: str
+    room_name: str
+
+
+class ForcePayoutRequest(BaseModel):
+    player_address: str
+    units: int = 1
+    admin_token: str | None = None
+
+
 def _resolve_character_id(
     character_id: str | None, philosopher_id: str | None
 ) -> str:
@@ -196,6 +207,7 @@ async def record_game_npc_talk(payload: NpcTalkRequest):
         "ok": True,
         "accepted": result["accepted"],
         "txHash": result["txHash"],
+        "autoPayoutTxHash": result.get("autoPayoutTxHash"),
         "progress": result["progress"],
         "contractAddress": os.getenv("GAME_CONTRACT_ADDRESS", "").strip(),
     }
@@ -206,6 +218,27 @@ async def get_game_challenge_progress(player_address: str):
     result = rewards_service.get_progress(player_address)
     result["contractAddress"] = os.getenv("GAME_CONTRACT_ADDRESS", "").strip()
     return result
+
+
+@app.post("/game/challenge/claim")
+async def claim_game_challenge_reward(payload: ClaimRequest):
+    result = rewards_service.claim_reward(
+        player_address=payload.player_address,
+        room_name=payload.room_name,
+    )
+    return {"ok": True, **result}
+
+
+@app.post("/game/admin/force-payout")
+async def force_game_payout(payload: ForcePayoutRequest):
+    required = os.getenv("DEMO_ADMIN_TOKEN", "").strip()
+    if required and payload.admin_token != required:
+        raise HTTPException(status_code=403, detail="Invalid admin token")
+    result = rewards_service.force_payout(
+        player_address=payload.player_address,
+        units=payload.units,
+    )
+    return {"ok": True, **result}
 
 
 if __name__ == "__main__":

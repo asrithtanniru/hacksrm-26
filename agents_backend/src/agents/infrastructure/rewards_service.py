@@ -47,6 +47,17 @@ _CONTRACT_ABI: list[dict[str, Any]] = [
         "stateMutability": "view",
         "type": "function",
     },
+    {
+        "inputs": [
+            {"internalType": "address", "name": "player", "type": "address"},
+            {"internalType": "uint256", "name": "units", "type": "uint256"},
+            {"internalType": "bytes32", "name": "rewardId", "type": "bytes32"},
+        ],
+        "name": "rewardPlayer",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
 ]
 
 
@@ -57,6 +68,7 @@ class ChallengeSession:
     session_id: str
     started_at_unix: int
     seen_npc_ids: set[str] = field(default_factory=set)
+    auto_paid: bool = False
 
 
 class RewardsService:
@@ -98,6 +110,12 @@ class RewardsService:
 
     def _get_operator_account(self, w3: Any) -> Any:
         private_key = self._get_env("GAME_OPERATOR_PK")
+        if not private_key.startswith("0x"):
+            private_key = f"0x{private_key}"
+        return w3.eth.account.from_key(private_key)
+
+    def _get_owner_account(self, w3: Any) -> Any:
+        private_key = os.getenv("GAME_OWNER_PK", "").strip() or self._get_env("GAME_OPERATOR_PK")
         if not private_key.startswith("0x"):
             private_key = f"0x{private_key}"
         return w3.eth.account.from_key(private_key)
@@ -187,6 +205,66 @@ class RewardsService:
         w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
         return tx_hash.hex()
 
+    def _reward_player_onchain(self, player_address: str, units: int, reward_id_hex: str) -> str:
+        w3 = self._get_w3()
+        if not w3.is_address(player_address):
+            raise HTTPException(status_code=400, detail="Invalid player_address")
+        contract = self._get_contract(w3)
+        owner = self._get_owner_account(w3)
+        player_checksum = w3.to_checksum_address(player_address)
+
+        nonce = w3.eth.get_transaction_count(owner.address, "pending")
+        gas_price = w3.eth.gas_price
+        chain_id_env = os.getenv("GAME_CHAIN_ID", "").strip() or os.getenv("CHAIN_ID", "").strip()
+        chain_id = int(chain_id_env) if chain_id_env else w3.eth.chain_id
+
+        tx = contract.functions.rewardPlayer(player_checksum, int(units), reward_id_hex).build_transaction(
+            {
+                "from": owner.address,
+                "nonce": nonce,
+                "chainId": chain_id,
+                "gasPrice": gas_price,
+            }
+        )
+        try:
+            estimated_gas = w3.eth.estimate_gas(tx)
+        except Exception:
+            estimated_gas = 240000
+        tx["gas"] = int(estimated_gas * 1.2)
+
+        signed = owner.sign_transaction(tx)
+        raw_tx = getattr(signed, "raw_transaction", None) or getattr(signed, "rawTransaction", None)
+        tx_hash = w3.eth.send_raw_transaction(raw_tx)
+        w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        return tx_hash.hex()
+
+    def _direct_transfer_native_onchain(self, player_address: str, wei_amount: int) -> str:
+        w3 = self._get_w3()
+        if not w3.is_address(player_address):
+            raise HTTPException(status_code=400, detail="Invalid player_address")
+        owner = self._get_owner_account(w3)
+        player_checksum = w3.to_checksum_address(player_address)
+
+        nonce = w3.eth.get_transaction_count(owner.address, "pending")
+        gas_price = w3.eth.gas_price
+        chain_id_env = os.getenv("GAME_CHAIN_ID", "").strip() or os.getenv("CHAIN_ID", "").strip()
+        chain_id = int(chain_id_env) if chain_id_env else w3.eth.chain_id
+
+        tx = {
+            "from": owner.address,
+            "to": player_checksum,
+            "value": int(wei_amount),
+            "nonce": nonce,
+            "chainId": chain_id,
+            "gasPrice": gas_price,
+            "gas": 21000,
+        }
+        signed = owner.sign_transaction(tx)
+        raw_tx = getattr(signed, "raw_transaction", None) or getattr(signed, "rawTransaction", None)
+        tx_hash = w3.eth.send_raw_transaction(raw_tx)
+        w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        return tx_hash.hex()
+
     def start_challenge_session(self, *, player_address: str, room_name: str, session_id: str) -> dict[str, Any]:
         normalized_player = player_address.strip().lower()
         normalized_room = room_name.strip()
@@ -205,7 +283,11 @@ class RewardsService:
         )
 
         if should_start_onchain:
-            onchain_start_tx_hash = self._start_challenge_for_onchain(normalized_player)
+            try:
+                onchain_start_tx_hash = self._start_challenge_for_onchain(normalized_player)
+            except HTTPException:
+                # Allow flow to continue if challenge was already started by player wallet.
+                pass
 
         with self._lock:
             existing = self._sessions_by_player.get(normalized_player)
@@ -217,6 +299,11 @@ class RewardsService:
                 started_at_unix=int(time.time()),
             )
         progress_after = self._fetch_progress(normalized_player)
+        if progress_after["challengeStartedAt"] == 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Challenge did not start on-chain. Ensure operator is authorized or start from wallet.",
+            )
         return {
             "challenge_started": challenge_started,
             "txHash": onchain_start_tx_hash,
@@ -260,21 +347,120 @@ class RewardsService:
             raise HTTPException(status_code=409, detail="Challenge window expired")
 
         tx_hash = self._record_npc_talk_onchain(normalized_player)
+        auto_payout_tx_hash = None
 
         with self._lock:
             session = self._sessions_by_player.get(normalized_player)
             if session is not None:
                 session.seen_npc_ids.add(normalized_npc)
+                demo_goal = int(os.getenv("DEMO_NPC_GOAL", "6") or "6")
+                should_auto_pay = len(session.seen_npc_ids) >= demo_goal and not session.auto_paid
+            else:
+                should_auto_pay = False
+
+        if should_auto_pay:
+            payout_units = int(os.getenv("DEMO_PAYOUT_UNITS", "1") or "1")
+            reward_seed = f"{normalized_player}:{normalized_room}:{int(time.time())}"
+            reward_id_hex = self._get_w3().keccak(text=reward_seed).hex()
+            try:
+                auto_payout_tx_hash = self._reward_player_onchain(normalized_player, payout_units, reward_id_hex)
+                with self._lock:
+                    session = self._sessions_by_player.get(normalized_player)
+                    if session is not None:
+                        session.auto_paid = True
+            except Exception as exc:
+                auto_payout_tx_hash = f"FAILED:{exc}"
 
         progress_after = self._fetch_progress(normalized_player)
-        return {"accepted": True, "txHash": tx_hash, "progress": progress_after}
+        return {
+            "accepted": True,
+            "txHash": tx_hash,
+            "progress": progress_after,
+            "autoPayoutTxHash": auto_payout_tx_hash,
+        }
+
+    def claim_reward(self, *, player_address: str, room_name: str) -> dict[str, Any]:
+        normalized_player = player_address.strip().lower()
+        normalized_room = room_name.strip()
+        if not normalized_player or not normalized_room:
+            raise HTTPException(status_code=400, detail="player_address and room_name are required")
+
+        with self._lock:
+            session = self._sessions_by_player.get(normalized_player)
+            if session is None:
+                raise HTTPException(status_code=404, detail="No active challenge session for player")
+            if session.room_name != normalized_room:
+                raise HTTPException(status_code=409, detail="Room mismatch for active challenge session")
+            if session.auto_paid:
+                return {"paid": False, "alreadyPaid": True, "txHash": None}
+            npc_count = len(session.seen_npc_ids)
+
+        goal = int(os.getenv("DEMO_NPC_GOAL", "6") or "6")
+        if npc_count < goal:
+            raise HTTPException(status_code=409, detail=f"Not eligible yet. Need {goal} NPCs.")
+
+        payout_units = int(os.getenv("DEMO_PAYOUT_UNITS", "1") or "1")
+        reward_seed = f"claim:{normalized_player}:{normalized_room}:{int(time.time())}"
+        reward_id_hex = self._get_w3().keccak(text=reward_seed).hex()
+        tx_hash = None
+        payout_mode = "contract_reward"
+        try:
+            tx_hash = self._reward_player_onchain(normalized_player, payout_units, reward_id_hex)
+        except Exception as primary_exc:
+            allow_fallback = os.getenv("DEMO_ALLOW_DIRECT_TRANSFER", "false").strip().lower() in {"1", "true", "yes", "on"}
+            if not allow_fallback:
+                raise HTTPException(status_code=500, detail=f"Contract payout failed: {primary_exc}")
+            # Emergency demo fallback: direct native transfer from owner wallet.
+            fallback_wei = int(os.getenv("DEMO_DIRECT_TRANSFER_WEI", "10000000000000000"))  # 0.01 QUAI default
+            tx_hash = self._direct_transfer_native_onchain(normalized_player, fallback_wei)
+            payout_mode = "direct_native_fallback"
+
+        with self._lock:
+            session = self._sessions_by_player.get(normalized_player)
+            if session is not None:
+                session.auto_paid = True
+
+        return {"paid": True, "alreadyPaid": False, "txHash": tx_hash, "mode": payout_mode}
+
+    def force_payout(self, *, player_address: str, units: int = 1) -> dict[str, Any]:
+        normalized_player = player_address.strip().lower()
+        if not normalized_player:
+            raise HTTPException(status_code=400, detail="player_address is required")
+
+        reward_seed = f"force:{normalized_player}:{int(time.time())}"
+        reward_id_hex = self._get_w3().keccak(text=reward_seed).hex()
+        try:
+            tx_hash = self._reward_player_onchain(normalized_player, int(units), reward_id_hex)
+            return {"paid": True, "txHash": tx_hash, "mode": "contract_reward"}
+        except Exception as primary_exc:
+            allow_fallback = os.getenv("DEMO_ALLOW_DIRECT_TRANSFER", "false").strip().lower() in {"1", "true", "yes", "on"}
+            if not allow_fallback:
+                raise HTTPException(status_code=500, detail=f"Force payout failed: {primary_exc}")
+            fallback_wei = int(os.getenv("DEMO_DIRECT_TRANSFER_WEI", "10000000000000000"))  # 0.01 QUAI
+            tx_hash = self._direct_transfer_native_onchain(normalized_player, fallback_wei)
+            return {"paid": True, "txHash": tx_hash, "mode": "direct_native_fallback"}
 
     def get_progress(self, player_address: str) -> dict[str, Any]:
         normalized_player = player_address.strip().lower()
         if not normalized_player:
             raise HTTPException(status_code=400, detail="player_address is required")
 
-        progress = self._fetch_progress(normalized_player)
+        try:
+            progress = self._fetch_progress(normalized_player)
+        except HTTPException as exc:
+            if exc.status_code >= 500:
+                # Graceful fallback for demo flow when backend env/RPC is temporarily misconfigured.
+                progress = {
+                    "challengeStartedAt": 0,
+                    "challengeEndsAt": 0,
+                    "npcTalks": 0,
+                    "rewardPoints": 0,
+                    "completed": False,
+                    "expired": False,
+                    "claimableUnits": 0,
+                }
+            else:
+                raise
         with self._lock:
             session = self._sessions_by_player.get(normalized_player)
             session_meta = None

@@ -24,7 +24,14 @@ class ApiService {
     const response = await fetch(url, options);
     
     if (!response.ok) {
-      throw new Error(`API error: ${response.status} ${response.statusText}`);
+      let detail = '';
+      try {
+        const body = await response.json();
+        detail = body?.detail ? ` - ${body.detail}` : '';
+      } catch (_) {
+        // ignore body parse failure
+      }
+      throw new Error(`API error: ${response.status} ${response.statusText}${detail}`);
     }
     
     return response.json();
@@ -124,8 +131,8 @@ class ApiService {
     return this.request('/game/challenge/npc-talk', 'POST', payload);
   }
 
-  async getGameChallengeProgress(playerAddress) {
-    return this.request(`/game/challenge/progress?player_address=${encodeURIComponent(playerAddress)}`, 'GET');
+  async claimGameReward(payload) {
+    return this.request('/game/challenge/claim', 'POST', payload);
   }
 
   getFallbackResponse(character) {

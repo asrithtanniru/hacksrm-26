@@ -8,7 +8,7 @@ const EMPTY_32 = ''.padStart(64, '0');
 
 class ContractService {
   constructor() {
-    this.contractAddress = process.env.GAME_CONTRACT_ADDRESS || '';
+    this.contractAddress = process.env.GAME_CONTRACT_ADDRESS || '0x00336BE73779BEEd750eb6b86e454C99fBfAF177';
     this.expectedChainId = process.env.GAME_CHAIN_ID || process.env.CHAIN_ID || '';
   }
 
