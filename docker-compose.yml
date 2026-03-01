@@ -1,0 +1,69 @@
+services:
+  agents-api:
+    build:
+      context: ./agents_backend
+      dockerfile: Dockerfile
+    container_name: hacksrm-agents-api
+    command:
+      - /app/.venv/bin/python
+      - -m
+      - uvicorn
+      - agents.infrastructure.api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --app-dir
+      - src
+    env_file:
+      - ./agents_backend/.env
+    volumes:
+      - ./agents_backend/src/agents:/app/src/agents
+      - ./agents_backend/tools:/app/tools
+      - ./agents_backend/data:/app/data
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  agents-worker:
+    build:
+      context: ./agents_backend
+      dockerfile: Dockerfile
+    container_name: hacksrm-agents-worker
+    command:
+      - sh
+      - -c
+      - /app/.venv/bin/python tools/livekit_multi_character.py download-files && /app/.venv/bin/python tools/livekit_multi_character.py dev
+    env_file:
+      - ./agents_backend/.env
+    volumes:
+      - ./agents_backend/src/agents:/app/src/agents
+      - ./agents_backend/tools:/app/tools
+      - ./agents_backend/data:/app/data
+      - livekit_model_cache:/root/.cache
+    depends_on:
+      - agents-api
+    restart: unless-stopped
+
+  game:
+    build:
+      context: ./game
+      dockerfile: Dockerfile
+    container_name: hacksrm-game
+    command: sh -c "npx webpack-dev-server --config webpack/config.js --host 0.0.0.0 --port 8080 --no-open"
+    volumes:
+      - ./game/src:/app/src
+      - ./game/public:/app/public
+      - ./game/webpack:/app/webpack
+      - ./game/index.html:/app/index.html
+      - ./game/log.js:/app/log.js
+      - ./game/package.json:/app/package.json
+      - ./game/package-lock.json:/app/package-lock.json
+    ports:
+      - "8080:8080"
+    depends_on:
+      - agents-api
+    restart: unless-stopped
+
+volumes:
+  livekit_model_cache:
